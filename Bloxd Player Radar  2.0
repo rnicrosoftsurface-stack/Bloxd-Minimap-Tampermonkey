@@ -1,0 +1,760 @@
+// ==UserScript==
+// @name         Bloxd Spieler-Radar 2- Alle spieler und gute ausrichtung, kein live ausrichtung
+// @namespace    bloxd-minimap-safe
+// @version      5.1.0
+// @description  Leichtes Chunkraster: du in der Mitte, andere Spieler als rote Punkte.
+// @match        https://bloxd.io/*
+// @match        https://bloxd.dev/*
+// @grant        unsafeWindow
+// @run-at       document-start
+// ==/UserScript==
+(function () {
+    "use strict";
+
+    const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+    const SIZE = 329;
+    const CHUNK = 32;
+    const ZOOMS = [16, 24, 32, 48, 64, 96, 128];
+    const UPDATE_MS = 100;
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+    let own = null;
+    let lastOwnText = 0;
+    let players = [];
+    let lobbyCount = 0;
+    let engine = null;
+    let radius = 64;
+    let panel, canvas, ctx, topBar, status, coordinates, playerCount, zoomText;
+    let hidden = false;
+    const textCalls = new WeakMap();
+
+    // Die Positionserkennung stammt aus dem Aufbau des bisherigen Scripts.
+    function parseNumber(value) {
+        const text = String(value).trim().replace(",", ".");
+        if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) return null;
+        const number = Number(text);
+        return Number.isFinite(number) ? number : null;
+    }
+
+    function parseTriple(value) {
+        const match = String(value).trim().replace(/,/g, ".").match(
+            /([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/
+        );
+        return match ? [+match[1], +match[2], +match[3]] : null;
+    }
+
+    function positionScore(a, b, c) {
+        if (Math.abs(b.value) > 2048) return -Infinity;
+        let score = Math.log10(1 + Math.abs(a.value)) +
+                    Math.log10(1 + Math.abs(c.value));
+        if (Math.abs(b.value) <= 512) score += 6;
+        if (Math.abs(a.value) > 256 || Math.abs(c.value) > 256) score += 3;
+        if (a.raw.includes(".")) score += 0.5;
+        if (c.raw.includes(".")) score += 0.5;
+        return score;
+    }
+
+    function receiveOwn(x, y, z) {
+        if (![x, y, z].every(Number.isFinite)) return;
+        if (Math.abs(y) > 10000 || Math.abs(x) > 1e9 || Math.abs(z) > 1e9) return;
+        own = { x, y, z };
+        lastOwnText = performance.now();
+    }
+
+    function inspectNumber(source, raw, value, x, y) {
+        const now = performance.now();
+        let calls = textCalls.get(source);
+
+        if (!calls) {
+            calls = [];
+            textCalls.set(source, calls);
+        }
+
+        calls.push({
+            raw: String(raw),
+            value,
+            x: +x,
+            y: +y,
+            time: now
+        });
+
+        while (calls.length && now - calls[0].time > 120) {
+            calls.shift();
+        }
+        if (calls.length < 3) return;
+
+        const preferred = /coordinate/i.test(String(source.className || ""));
+        let best = null;
+        let bestScore = -Infinity;
+
+        for (let i = 0; i < calls.length - 2; i++) {
+            for (let j = i + 1; j < calls.length - 1; j++) {
+                for (let k = j + 1; k < calls.length; k++) {
+                    const candidate = [calls[i], calls[j], calls[k]]
+                        .sort((a, b) => a.x - b.x);
+
+                    if (
+                        Math.max(...candidate.map(p => p.y)) -
+                        Math.min(...candidate.map(p => p.y)) > 10
+                    ) continue;
+
+                    if (!(
+                        candidate[0].x < candidate[1].x &&
+                        candidate[1].x < candidate[2].x
+                    )) continue;
+
+                    const score =
+                        positionScore(...candidate) +
+                        (preferred ? 20 : 0);
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = candidate;
+                    }
+                }
+            }
+        }
+
+        if (best && bestScore > 7) {
+            receiveOwn(
+                best[0].value,
+                best[1].value,
+                best[2].value
+            );
+        }
+    }
+
+    function hookCoordinates() {
+        const proto = W.CanvasRenderingContext2D?.prototype;
+        if (!proto || proto.__bloxdPlayerRadarPositionHook) return;
+
+        const original = proto.fillText;
+
+        Object.defineProperty(proto, "__bloxdPlayerRadarPositionHook", {
+            value: true,
+            configurable: true
+        });
+
+        proto.fillText = function (value, x, y, maxWidth) {
+            try {
+                if (this.canvas !== canvas) {
+                    const triple = parseTriple(value);
+
+                    if (triple) {
+                        receiveOwn(...triple);
+                    } else {
+                        const number = parseNumber(value);
+                        if (number !== null && this.canvas) {
+                            inspectNumber(
+                                this.canvas,
+                                value,
+                                number,
+                                x,
+                                y
+                            );
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            return arguments.length >= 4
+                ? original.call(this, value, x, y, maxWidth)
+                : original.call(this, value, x, y);
+        };
+    }
+
+    function validEngine(value) {
+        try {
+            return !!value &&
+                typeof value.entities?.getState === "function" &&
+                typeof value.bloxd?.getPlayerIds === "function";
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function hookEngine() {
+        if (validEngine(W.__bloxdNoa)) {
+            engine = W.__bloxdNoa;
+            return;
+        }
+        if (validEngine(W.noa)) {
+            engine = W.noa;
+            return;
+        }
+
+        const proto = W.Function.prototype;
+        const original = proto.call;
+        if (proto.__bloxdPlayerRadarCallHook) return;
+
+        Object.defineProperty(proto, "__bloxdPlayerRadarCallHook", {
+            value: true,
+            configurable: true
+        });
+
+        function wrappedCall() {
+            const candidate = arguments[1];
+
+            if (!engine && validEngine(candidate)) {
+                engine = candidate;
+                if (proto.call === wrappedCall) {
+                    proto.call = original;
+                }
+            }
+
+            return Reflect.apply(original, this, arguments);
+        }
+
+        proto.call = wrappedCall;
+
+        setTimeout(() => {
+            if (proto.call === wrappedCall) {
+                proto.call = original;
+            }
+        }, 30000);
+    }
+
+    function positionOf(entityId) {
+        if (!engine) return null;
+
+        try {
+            const state = engine.entities.getState(entityId, "position");
+            const value = state?.position || state;
+
+            if (value && value.length >= 3) {
+                const x = Number(value[0]);
+                const y = Number(value[1]);
+                const z = Number(value[2]);
+
+                if ([x, y, z].every(Number.isFinite)) {
+                    return { x, y, z };
+                }
+            }
+        } catch (_) {}
+
+        return null;
+    }
+
+    function playerEntries(value) {
+        if (value instanceof Map) {
+            return [...value.entries()];
+        }
+        if (Array.isArray(value)) {
+            return value.map((entry, i) => [String(i), entry]);
+        }
+        if (value && typeof value === "object") {
+            return Object.entries(value);
+        }
+        return [];
+    }
+
+    function refreshPlayers() {
+        if (!engine) {
+            if (validEngine(W.__bloxdNoa)) {
+                engine = W.__bloxdNoa;
+            } else if (validEngine(W.noa)) {
+                engine = W.noa;
+            }
+        }
+
+        if (!engine) {
+            players = [];
+            lobbyCount = 0;
+            return;
+        }
+
+        try {
+            const selfId = Number(
+                engine.playerEntity?.id ??
+                engine.playerEntity ??
+                1
+            );
+
+            if (!own || performance.now() - lastOwnText > 1800) {
+                const selfPosition = positionOf(
+                    Number.isFinite(selfId) ? selfId : 1
+                );
+                if (selfPosition) own = selfPosition;
+            }
+
+            const ids = engine.bloxd.getPlayerIds();
+            const result = [];
+            const seen = new Set();
+
+            if (own && Number.isFinite(selfId)) {
+                seen.add(selfId);
+            }
+
+            for (const [name, rawId] of playerEntries(ids)) {
+                const id = Number(
+                    rawId?.entityId ??
+                    rawId?.id ??
+                    rawId
+                );
+
+                if (!Number.isFinite(id) || seen.has(id)) {
+                    continue;
+                }
+
+                seen.add(id);
+
+                const position = positionOf(id);
+                if (position) {
+                    result.push({
+                        id,
+                        name,
+                        ...position
+                    });
+                }
+            }
+
+            players = result;
+            lobbyCount = seen.size;
+        } catch (_) {
+            players = [];
+            lobbyCount = 0;
+        }
+    }
+
+    // +X oben, +Z links, -Z rechts.
+    function screenPosition(x, z, pixelsPerBlock) {
+        return {
+            x: SIZE / 2 - (z - own.z) * pixelsPerBlock,
+            y: SIZE / 2 - (x - own.x) * pixelsPerBlock
+        };
+    }
+
+    function drawGrid(pixelsPerBlock) {
+        ctx.fillStyle = "#202a34";
+        ctx.fillRect(0, 0, SIZE, SIZE);
+
+        if (!own) return;
+
+        const minX = Math.floor(own.x - radius) - 1;
+        const maxX = Math.ceil(own.x + radius) + 1;
+        const minZ = Math.floor(own.z - radius) - 1;
+        const maxZ = Math.ceil(own.z + radius) + 1;
+
+        // Dünnes Raster alle acht Blöcke.
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(210,225,240,.10)";
+        ctx.beginPath();
+
+        for (
+            let z = Math.ceil(minZ / 8) * 8;
+            z <= maxZ;
+            z += 8
+        ) {
+            const px =
+                Math.round(
+                    screenPosition(0, z, pixelsPerBlock).x
+                ) + 0.5;
+
+            ctx.moveTo(px, 0);
+            ctx.lineTo(px, SIZE);
+        }
+
+        for (
+            let x = Math.ceil(minX / 8) * 8;
+            x <= maxX;
+            x += 8
+        ) {
+            const py =
+                Math.round(
+                    screenPosition(x, 0, pixelsPerBlock).y
+                ) + 0.5;
+
+            ctx.moveTo(0, py);
+            ctx.lineTo(SIZE, py);
+        }
+
+        ctx.stroke();
+
+        // Chunkgrenzen alle 32 Blöcke.
+        ctx.strokeStyle = "rgba(225,240,255,.32)";
+        ctx.beginPath();
+
+        for (
+            let z = Math.ceil(minZ / CHUNK) * CHUNK;
+            z <= maxZ;
+            z += CHUNK
+        ) {
+            const px =
+                Math.round(
+                    screenPosition(0, z, pixelsPerBlock).x
+                ) + 0.5;
+
+            ctx.moveTo(px, 0);
+            ctx.lineTo(px, SIZE);
+        }
+
+        for (
+            let x = Math.ceil(minX / CHUNK) * CHUNK;
+            x <= maxX;
+            x += CHUNK
+        ) {
+            const py =
+                Math.round(
+                    screenPosition(x, 0, pixelsPerBlock).y
+                ) + 0.5;
+
+            ctx.moveTo(0, py);
+            ctx.lineTo(SIZE, py);
+        }
+
+        ctx.stroke();
+
+        // Schwache Linien durch die eigene Position.
+        ctx.strokeStyle = "rgba(225,245,255,.18)";
+        ctx.beginPath();
+        ctx.moveTo(SIZE / 2 + 0.5, 0);
+        ctx.lineTo(SIZE / 2 + 0.5, SIZE);
+        ctx.moveTo(0, SIZE / 2 + 0.5);
+        ctx.lineTo(SIZE, SIZE / 2 + 0.5);
+        ctx.stroke();
+    }
+
+    function drawDot(x, y, color, radius, outline) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = outline;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+
+    function draw() {
+        if (!ctx || hidden) return;
+
+        const scale = SIZE / (radius * 2);
+        drawGrid(scale);
+
+        if (!own) return;
+
+        for (const player of players) {
+            const p = screenPosition(
+                player.x,
+                player.z,
+                scale
+            );
+
+            if (
+                p.x < 6 ||
+                p.x > SIZE - 6 ||
+                p.y < 6 ||
+                p.y > SIZE - 6
+            ) continue;
+
+            drawDot(
+                p.x,
+                p.y,
+                "#ff4055",
+                4,
+                "#fff0f1"
+            );
+        }
+
+        drawDot(
+            SIZE / 2,
+            SIZE / 2,
+            "#63e5ff",
+            5,
+            "#ffffff"
+        );
+    }
+
+    function updateLabels() {
+        if (!status) return;
+
+        if (!own) {
+            status.textContent = "WARTE AUF POSITION";
+            status.style.color = "#ffd166";
+            coordinates.textContent = "X ---   Y ---   Z ---";
+        } else {
+            const paused =
+                !engine &&
+                performance.now() - lastOwnText > 1800;
+
+            status.textContent = paused
+                ? "POSITION PAUSIERT"
+                : "POSITION LIVE";
+
+            status.style.color = paused
+                ? "#ffd166"
+                : "#52ff93";
+
+            coordinates.textContent =
+                `X ${own.x.toFixed(2)}   ` +
+                `Y ${own.y.toFixed(2)}   ` +
+                `Z ${own.z.toFixed(2)}`;
+        }
+
+        playerCount.textContent = engine
+            ? `Spieler in Lobby: ${lobbyCount}`
+            : "Spielerdaten werden gesucht …";
+
+        zoomText.textContent = `R ${radius}`;
+    }
+
+    function button(label, title, action) {
+        const element = document.createElement("button");
+
+        element.textContent = label;
+        element.title = title;
+
+        element.style.cssText =
+            "height:29px;min-width:29px;" +
+            "border:1px solid #26384a;" +
+            "border-radius:7px;" +
+            "background:#0b1722;" +
+            "color:#eaf4ff;" +
+            "font:800 11px Arial;" +
+            "cursor:pointer;padding:0 9px";
+
+        element.addEventListener("click", action);
+        return element;
+    }
+
+    function createPanel() {
+        if (panel || !document.body) return;
+
+        document
+            .getElementById("bloxd-position-minimap")
+            ?.remove();
+
+        panel = document.createElement("div");
+        panel.id = "bloxd-position-minimap";
+
+        panel.style.cssText =
+            "position:fixed;right:18px;top:150px;" +
+            "width:355px;z-index:2147483646;" +
+            "background:rgba(7,16,25,.96);" +
+            "border:1px solid #26394d;" +
+            "border-radius:14px;" +
+            "box-shadow:0 16px 45px rgba(0,0,0,.42);" +
+            "color:#eef6ff;font-family:Arial,sans-serif;" +
+            "overflow:hidden;user-select:none";
+
+        topBar = document.createElement("div");
+        topBar.style.cssText =
+            "height:48px;display:flex;" +
+            "align-items:center;gap:8px;" +
+            "padding:0 10px;cursor:move";
+
+        const titleArea = document.createElement("div");
+        titleArea.style.flex = "1";
+
+        const title = document.createElement("div");
+        title.textContent = "SPIELER-RADAR";
+        title.style.cssText = "font:900 13px Arial";
+
+        status = document.createElement("div");
+        status.style.cssText =
+            "font:800 9px Consolas;" +
+            "color:#ffd166;margin-top:2px";
+
+        titleArea.append(title, status);
+
+        const minimize = button(
+            "−",
+            "Minimieren",
+            () => {
+                hidden = !hidden;
+                content.style.display =
+                    hidden ? "none" : "block";
+                minimize.textContent =
+                    hidden ? "+" : "−";
+
+                if (!hidden) draw();
+            }
+        );
+
+        topBar.append(titleArea, minimize);
+
+        const content = document.createElement("div");
+        content.style.cssText = "padding:0 12px 12px";
+
+        const bar = document.createElement("div");
+        bar.style.cssText =
+            "display:flex;align-items:center;" +
+            "gap:6px;margin:1px 0 8px";
+
+        const hint = document.createElement("span");
+        hint.textContent = "8 BLOCK / 32 CHUNK";
+        hint.style.cssText =
+            "flex:1;font:800 9px Consolas;" +
+            "color:#8fa2b7";
+
+        zoomText = document.createElement("span");
+        zoomText.style.cssText =
+            "font:800 10px Consolas;color:#b9cfe0";
+
+        bar.append(
+            hint,
+            zoomText,
+            button(
+                "−",
+                "Rauszoomen",
+                () => {
+                    radius =
+                        ZOOMS.find(v => v > radius) ||
+                        radius;
+                    draw();
+                }
+            ),
+            button(
+                "+",
+                "Reinzoomen",
+                () => {
+                    radius =
+                        [...ZOOMS]
+                            .reverse()
+                            .find(v => v < radius) ||
+                        radius;
+                    draw();
+                }
+            )
+        );
+
+        canvas = document.createElement("canvas");
+        canvas.width = SIZE;
+        canvas.height = SIZE;
+
+        canvas.style.cssText =
+            `display:block;width:${SIZE}px;` +
+            `height:${SIZE}px;background:#202a34;` +
+            "border:1px solid #203548;" +
+            "border-radius:9px";
+
+        ctx = canvas.getContext("2d", {
+            alpha: false
+        });
+
+        coordinates = document.createElement("div");
+        coordinates.style.cssText =
+            "margin-top:8px;font:700 10px Consolas;" +
+            "color:#b7c9da";
+
+        playerCount = document.createElement("div");
+        playerCount.style.cssText =
+            "margin-top:5px;font:700 9px Consolas;" +
+            "color:#9fb6c9";
+
+        const compass = document.createElement("div");
+        compass.textContent =
+            "+Z ←      +X ↑      −Z →      −X ↓";
+
+        compass.style.cssText =
+            "margin-top:6px;font:800 9px Consolas;" +
+            "color:#7fa0bb";
+
+        content.append(
+            bar,
+            canvas,
+            coordinates,
+            playerCount,
+            compass
+        );
+
+        panel.append(topBar, content);
+        document.body.appendChild(panel);
+
+        let drag = null;
+
+        topBar.addEventListener(
+            "mousedown",
+            event => {
+                if (
+                    event.target.tagName ===
+                    "BUTTON"
+                ) return;
+
+                const rect =
+                    panel.getBoundingClientRect();
+
+                drag = {
+                    x: event.clientX - rect.left,
+                    y: event.clientY - rect.top
+                };
+
+                event.preventDefault();
+            }
+        );
+
+        W.addEventListener(
+            "mousemove",
+            event => {
+                if (!drag) return;
+
+                panel.style.left =
+                    clamp(
+                        event.clientX - drag.x,
+                        0,
+                        Math.max(
+                            0,
+                            innerWidth -
+                            panel.offsetWidth
+                        )
+                    ) + "px";
+
+                panel.style.top =
+                    clamp(
+                        event.clientY - drag.y,
+                        0,
+                        Math.max(
+                            0,
+                            innerHeight - 40
+                        )
+                    ) + "px";
+
+                panel.style.right = "auto";
+            }
+        );
+
+        W.addEventListener(
+            "mouseup",
+            () => {
+                drag = null;
+            }
+        );
+
+        updateLabels();
+        draw();
+    }
+
+    function tick() {
+        refreshPlayers();
+        updateLabels();
+        draw();
+    }
+
+    hookCoordinates();
+    hookEngine();
+
+    if (document.readyState === "loading") {
+        document.addEventListener(
+            "DOMContentLoaded",
+            createPanel,
+            { once: true }
+        );
+    } else {
+        createPanel();
+    }
+
+    setInterval(tick, UPDATE_MS);
+
+    W.__BloxdPlayerRadar = {
+        getOwnPosition: () =>
+            own ? { ...own } : null,
+
+        getPlayers: () =>
+            players.map(p => ({ ...p })),
+
+        engineFound: () =>
+            !!engine,
+
+        getRadius: () =>
+            radius
+    };
+})();
