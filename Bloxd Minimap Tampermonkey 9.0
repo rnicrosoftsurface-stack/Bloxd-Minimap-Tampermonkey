@@ -1,0 +1,4116 @@
+// ==UserScript==
+// @name         Bloxd Minimap 11- Step 11 Surface Textures
+// @namespace    bloxd-minimap-safe
+// @version      3.8.0
+// @description  Real Bloxd surface textures; underground Y/ore view stays clean and color based.
+// @match        https://bloxd.dev/*
+// @match        https://bloxd.io/*
+// @grant        unsafeWindow
+// @grant        GM_xmlhttpRequest
+// @connect      rnicrosoftsurface-stack.github.io
+// @run-at       document-start
+// ==/UserScript==
+(function(){
+"use strict";
+const W=typeof unsafeWindow!=="undefined"?unsafeWindow:window;
+const BASE="https://rnicrosoftsurface-stack.github.io/bloxd-minimap";
+const CS=32,SURF_MIN=-3,SURF_MAX=3,ALL_ORE_LEVELS=[-4,-3,-2],STRUCT_MIN=-4,STRUCT_MAX=3;
+const PANEL_W=355,PANEL_H=540,MAP_W=329,ZOOMS=[3,5,10,15,20,25,30,35,40,45,50],SNAP=12,MARGIN=8,DRAW_MS=60,MAX_CACHE=500;
+
+const SURFACE_ATLAS_COLS=16,SURFACE_ATLAS_CELL=16;
+
+const SURFACE_TEX_INDEX={
+"cactus_dry":0,
+"cactus_top":1,
+"clay":2,
+"coarse_dirt":3,
+"dirt":4,
+"grass_top":5,
+"gravel":6,
+"green_stone":7,
+"jungle_grass_block":8,
+"jungle_tall_grass_bottom":9,
+"jungle_tall_grass_top":10,
+"leaves_aspen":11,
+"leaves_aspen_autumn":12,
+"leaves_cedar":13,
+"leaves_cherry":14,
+"leaves_cherry_fruity":15,
+"leaves_elm":16,
+"leaves_jungle":17,
+"leaves_mango":18,
+"leaves_mango_fruity":19,
+"leaves_maple":20,
+"leaves_maple_autumn":21,
+"leaves_maple_fruity":22,
+"leaves_palm":23,
+"leaves_palm_fruity":24,
+"leaves_pear":25,
+"leaves_pear_fruity":26,
+"leaves_pine":27,
+"leaves_pine_cone":28,
+"leaves_plum":29,
+"leaves_plum_fruity":30,
+"leaves_spectral":31,
+"lily_of_the_valley":32,
+"log_aspen":33,
+"log_cedar":34,
+"log_cherry":35,
+"log_elm":36,
+"log_jungle":37,
+"log_mango":38,
+"log_maple":39,
+"log_palm":40,
+"log_pear":41,
+"log_pine":42,
+"log_plum":43,
+"log_spectral":44,
+"messy_stone":45,
+"oxeye_daisy":46,
+"packed_snow":47,
+"pine_grass_block":48,
+"poppy":49,
+"red_sand":50,
+"red_sandstone":51,
+"red_sandstone_top":52,
+"rocky_dirt":53,
+"sand":54,
+"sandstone_normal":55,
+"sandstone_top":56,
+"smooth_stone":57,
+"snow":58,
+"snowy_messy_stone":59,
+"stone":60,
+"stone_andesite":61,
+"stone_andesite_smooth":62,
+"stone_diorite":63,
+"stone_diorite_smooth":64,
+"stone_granite":65,
+"stone_granite_smooth":66,
+"tall_grass_bottom":67,
+"tall_grass_top":68,
+"tallgrass":69
+};
+
+const SURFACE_ATLAS_DATA="data:image/png;base64,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";
+
+const surfaceAtlas=new Image();
+surfaceAtlas.src=SURFACE_ATLAS_DATA;
+let surfaceAtlasReady=false;
+surfaceAtlas.onload=()=>{surfaceAtlasReady=true;};
+
+let radius=30,mode="surface",current=null,lastSeen=0;
+let showY1=false,showAllOres=false,showSpawner=false;
+
+let root,controls,scrollArea,canvas,ctx,statusEl,coordsEl,seedEl,stateEl;
+let mapBtn,yBtn,y1Btn,allBtn,spawnerBtn,radiusEl;
+let chunkDetails,chunkSummaryEl,chunkListEl;
+let minimized=false;
+
+const calls=new WeakMap();
+const chunks=new Map();
+const pending=new Map();
+const blockTexts=new Map();
+const blockNames=new Map();
+const blockMeta=new Map();
+const chunkStatsCache=new Map();
+
+let bmd=null,imd=null,workerFn=null,worker=null,workerSeed=null;
+let ready=false,error=null;
+
+let mapData=null,mapCX=null,mapCZ=null,mapSeed=null,mapModeBuilt=null,mapYBuilt=null;
+let buildRun=false,buildQueued=false,buildToken=0;
+
+let y1OrePts=[],allOrePts=[];
+let oreCX=null,oreCZ=null,oreR=null,oreSeed=null,oreBaseY=null;
+let oreRun=false,oreQueued=false,oreToken=0;
+
+let structurePts=[];
+let structCX=null,structCZ=null,structR=null,structSeed=null;
+let structRun=false,structQueued=false,structToken=0;
+
+let chunkStatsToken=0,lastChunkStatsKey=null,lastDraw=0;
+
+const floorDiv=(v,d)=>Math.floor(v/d);
+const mod=(v,d)=>((v%d)+d)%d;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const key=(s,x,y,z)=>`${s}|${x}|${y}|${z}`;
+const layerY=()=>current?Math.floor(current.y):0;
+const snap=v=>Math.floor(v/SNAP)*SNAP;
+
+function seed(){
+    try{
+        const u=new URL(location.href);
+        const l=u.searchParams.get("lobby");
+        if(l!==null&&l!==""){
+            if(/^-?\d+$/.test(l)){
+                const n=Number(l);
+                if(Number.isSafeInteger(n))return n;
+            }
+            return l;
+        }
+    }catch(_){}
+    return 1234;
+}
+
+function num(t){
+    const s=String(t).trim().replace(",",".");
+    if(!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(s))return null;
+    const n=Number(s);
+    return Number.isFinite(n)?n:null;
+}
+
+function triple(t){
+    const m=String(t).trim().replace(/,/g,".").match(
+        /([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/
+    );
+
+    if(!m)return null;
+
+    const a=[+m[1],+m[2],+m[3]];
+    return a.every(Number.isFinite)?a:null;
+}
+
+function posScore(a,b,c){
+    if(Math.abs(b.n)>2048)return-Infinity;
+
+    let s=
+        Math.log10(1+Math.abs(a.n))+
+        Math.log10(1+Math.abs(c.n));
+
+    if(Math.abs(b.n)<=512)s+=6;
+    if(Math.abs(a.n)>256||Math.abs(c.n)>256)s+=3;
+    if(String(a.raw).includes("."))s+=.5;
+    if(String(c.raw).includes("."))s+=.5;
+
+    return s;
+}
+
+function inspect(c,raw,n,x,y){
+    const now=performance.now();
+
+    let a=calls.get(c);
+
+    if(!a){
+        a=[];
+        calls.set(c,a);
+    }
+
+    a.push({
+        n,
+        x:+x,
+        y:+y,
+        t:now,
+        raw:String(raw)
+    });
+
+    while(a.length&&now-a[0].t>120)a.shift();
+
+    if(a.length<3)return;
+
+    let best=null;
+    let bs=-Infinity;
+
+    const pref=/coordinate/i.test(String(c.className||""));
+
+    for(let i=0;i<a.length-2;i++){
+        for(let j=i+1;j<a.length-1;j++){
+            for(let k=j+1;k<a.length;k++){
+
+                const p=[a[i],a[j],a[k]].sort(
+                    (u,v)=>u.x-v.x
+                );
+
+                if(
+                    Math.max(p[0].y,p[1].y,p[2].y)-
+                    Math.min(p[0].y,p[1].y,p[2].y)>10
+                )continue;
+
+                if(!(p[0].x<p[1].x&&p[1].x<p[2].x))continue;
+
+                const s=
+                    posScore(p[0],p[1],p[2])+
+                    (pref?20:0);
+
+                if(s>bs){
+                    bs=s;
+                    best=p;
+                }
+            }
+        }
+    }
+
+    if(best&&bs>7){
+        accept(
+            best[0].n,
+            best[1].n,
+            best[2].n
+        );
+    }
+}
+
+function hook(){
+    const P=
+        W.CanvasRenderingContext2D&&
+        W.CanvasRenderingContext2D.prototype;
+
+    if(!P||P.__bloxdMapHook38)return;
+
+    const orig=P.fillText;
+
+    Object.defineProperty(
+        P,
+        "__bloxdMapHook38",
+        {
+            value:true,
+            configurable:true
+        }
+    );
+
+    P.fillText=function(t,x,y,m){
+        try{
+            const q=triple(t);
+
+            if(q){
+                accept(q[0],q[1],q[2]);
+            }else{
+                const n=num(t);
+
+                if(n!==null&&this?.canvas){
+                    inspect(
+                        this.canvas,
+                        t,
+                        n,
+                        x,
+                        y
+                    );
+                }
+            }
+        }catch(_){}
+
+        return arguments.length>=4
+            ?orig.call(this,t,x,y,m)
+            :orig.call(this,t,x,y);
+    };
+}
+
+function currentSnap(){
+    if(!current)return null;
+
+    return{
+        x:snap(Math.floor(current.x)),
+        z:snap(Math.floor(current.z))
+    };
+}
+
+function accept(x,y,z){
+    if(
+        ![x,y,z].every(Number.isFinite)||
+        Math.abs(y)>10000||
+        Math.abs(x)>1e9||
+        Math.abs(z)>1e9
+    )return;
+
+    const oldY=layerY();
+    const os=currentSnap();
+
+    const oldChunk=current
+        ?`${floorDiv(current.x,CS)}|${floorDiv(current.y,CS)}|${floorDiv(current.z,CS)}`
+        :null;
+
+    current={x,y,z};
+
+    lastSeen=performance.now();
+
+    const ns=currentSnap();
+
+    const areaChanged=
+        !os||
+        os.x!==ns.x||
+        os.z!==ns.z;
+
+    const yChanged=
+        oldY!==layerY();
+
+    const newChunk=
+        `${floorDiv(x,CS)}|${floorDiv(y,CS)}|${floorDiv(z,CS)}`;
+
+    if(mode==="layer"&&yChanged){
+        invalidateMap();
+        queueMap(true);
+    }else{
+        queueMap(false);
+    }
+
+    if(
+        (showY1&&yChanged)||
+        ((showY1||showAllOres)&&areaChanged)
+    ){
+        invalidateOres();
+        queueOres(true);
+    }else if(showY1||showAllOres){
+        queueOres(false);
+    }
+
+    if(showSpawner&&areaChanged){
+        invalidateStructures();
+        queueStructures(true);
+    }else if(showSpawner){
+        queueStructures(false);
+    }
+
+    if(
+        chunkDetails?.open&&
+        oldChunk!==newChunk
+    ){
+        queueChunkStats(true);
+    }
+
+    updateText();
+}
+
+function getText(url){
+    return new Promise((res,rej)=>
+        GM_xmlhttpRequest({
+            method:"GET",
+            url,
+            responseType:"text",
+            timeout:20000,
+
+            onload:r=>
+                r.status>=200&&r.status<300
+                    ?res(r.responseText)
+                    :rej(new Error(`HTTP ${r.status}`)),
+
+            onerror:()=>
+                rej(new Error("Network error")),
+
+            ontimeout:()=>
+                rej(new Error("Timeout"))
+        })
+    );
+}
+
+function extract(src,v){
+    return new Function(
+        src+
+        `\nreturn typeof ${v}!=="undefined"?${v}:null;`
+    )();
+}
+
+function buildIndex(){
+    blockTexts.clear();
+    blockNames.clear();
+    blockMeta.clear();
+
+    blockNames.set(0,"Air");
+
+    for(const[name,e]of Object.entries(bmd||{})){
+
+        const id=Number(e?.id);
+
+        if(!Number.isFinite(id))continue;
+
+        const display=
+            typeof e?.name==="string"
+                ?e.name
+                :typeof e?.meta?.rootName==="string"
+                    ?e.meta.rootName
+                    :name;
+
+        blockNames.set(
+            id,
+            display||`Block ${id}`
+        );
+
+        blockTexts.set(
+            id,
+            `${name} ${e?.name||""} ${e?.meta?.rootName||""}`.toLowerCase()
+        );
+
+        blockMeta.set(id,e);
+    }
+}
+
+const text=id=>
+    blockTexts.get(Number(id))||"";
+
+const nameOf=id=>
+    blockNames.get(Number(id))||`Block ${id}`;
+
+const isAir=id=>
+    Number(id)===0||
+    text(id).includes("air");
+
+function isFlower(id){
+    const t=text(id);
+
+    return[
+        "poppy",
+        "daisy",
+        "lily of the valley",
+        "flower",
+        "rose",
+        "tulip",
+        "dandelion",
+        "orchid",
+        "lavender",
+        "bluebell",
+        "allium",
+        "bluet"
+    ].some(s=>t.includes(s));
+}
+
+function isPlantDecor(id){
+    const t=text(id);
+
+    return[
+        "tall grass",
+        "jungle tall grass",
+        "grass plant",
+        "fern",
+        "bush",
+        "sapling"
+    ].some(s=>t.includes(s));
+}
+
+function isDecoration(id){
+    const t=text(id);
+
+    return(
+        !isAir(id)&&
+        (
+            isFlower(id)||
+            isPlantDecor(id)||
+            t.includes("torch")
+        )
+    );
+}
+
+function ignoreSurface(id){
+    return isAir(id)||isDecoration(id);
+}
+
+function isAnyOre(id){
+    const n=Number(id);
+    const t=text(id);
+
+    return(
+        n===45||
+        n===465||
+        (
+            t.includes("ore")&&
+            [
+                "diamond",
+                "moonstone",
+                "gold",
+                "iron",
+                "coal"
+            ].some(s=>t.includes(s))
+        )
+    );
+}
+
+function isAllOreTarget(id){
+    const n=Number(id);
+    const t=text(id);
+
+    return(
+        n===45||
+        n===465||
+        t.includes("diamond ore")||
+        t.includes("moonstone ore")
+    );
+}
+
+function isSpawner(id){
+    const t=text(id);
+
+    return(
+        t.includes("spawner")&&
+        !t.includes("spawn block")
+    );
+}
+
+function isMagma(id){
+    const t=text(id);
+
+    return(
+        t==="magma"||
+        t.includes(" magma")||
+        t.startsWith("magma")||
+        t.includes("magma block")
+    );
+}
+
+function oreColor(id){
+    const n=Number(id);
+    const t=text(id);
+
+    if(
+        n===465||
+        t.includes("moonstone")
+    )return[255,35,56];
+
+    if(
+        n===45||
+        t.includes("diamond")
+    )return[30,157,255];
+
+    if(t.includes("gold"))
+        return[235,186,25];
+
+    if(t.includes("iron"))
+        return[245,245,245];
+
+    if(t.includes("coal"))
+        return[16,22,29];
+
+    return[255,0,255];
+}
+
+function blockColor(id){
+    const t=text(id);
+
+    if(isAnyOre(id))
+        return oreColor(id);
+
+    if(t.includes("water"))
+        return[92,111,213];
+
+    if(t.includes("lava"))
+        return[238,82,18];
+
+    if(t.includes("red sand"))
+        return[181,84,43];
+
+    if(t.includes("sand"))
+        return[205,190,128];
+
+    if(t.includes("snow"))
+        return[232,236,240];
+
+    if(t.includes("ice"))
+        return[165,212,230];
+
+    if(t.includes("grass"))
+        return[84,155,56];
+
+    if(
+        t.includes("leaf")||
+        t.includes("leaves")
+    )
+        return[44,112,37];
+
+    if(
+        t.includes("dirt")||
+        t.includes("mud")
+    )
+        return[115,78,50];
+
+    if(
+        t.includes("wood")||
+        t.includes("log")||
+        t.includes("plank")
+    )
+        return[126,88,52];
+
+    if(t.includes("cactus"))
+        return[36,110,43];
+
+    if(t.includes("clay"))
+        return[151,108,93];
+
+    if(t.includes("gravel"))
+        return[105,105,108];
+
+    if(
+        t.includes("stone")||
+        t.includes("rock")
+    )
+        return[145,145,145];
+
+    return[120,120,120];
+}
+
+function noise(x,z,id){
+    let n=Math.imul(x,374761393);
+
+    n^=Math.imul(z,668265263);
+
+    n^=Math.imul(
+        Number(id)+1,
+        1442695041
+    );
+
+    n=Math.imul(
+        n^(n>>>13),
+        1274126177
+    );
+
+    n^=n>>>16;
+
+    return((n>>>0)/4294967295)-.5;
+}
+
+function normalTexName(v){
+    if(typeof v!=="string")
+        return null;
+
+    return v
+        .replace(/\.png$/i,"")
+        .trim();
+}
+
+function surfaceTextureName(id){
+
+    const e=
+        blockMeta.get(Number(id));
+
+    if(!e)
+        return fallbackTextureName(id);
+
+    const ti=e.textureInfo;
+
+    let candidates=[];
+
+    if(typeof ti==="string"){
+        candidates=[ti];
+    }else if(Array.isArray(ti)){
+        candidates=
+            ti.filter(v=>typeof v==="string");
+    }
+
+    if(typeof e.itemTexture==="string"){
+        candidates.push(e.itemTexture);
+    }
+
+    candidates=
+        candidates
+            .map(normalTexName)
+            .filter(Boolean);
+
+    const top=
+        candidates.find(
+            n=>
+                /(^|_)top($|_)/.test(n)||
+                n==="grass_top"
+        )||
+        candidates[0];
+
+    if(
+        top&&
+        SURFACE_TEX_INDEX[top]!==undefined
+    ){
+        return top;
+    }
+
+    for(const n of candidates){
+        if(SURFACE_TEX_INDEX[n]!==undefined)
+            return n;
+    }
+
+    return fallbackTextureName(id);
+}
+
+function fallbackTextureName(id){
+    const t=text(id);
+    const n=nameOf(id).toLowerCase();
+
+    let m;
+
+    if(t.includes("jungle grass block"))
+        return"jungle_grass_block";
+
+    if(t.includes("pine grass block"))
+        return"pine_grass_block";
+
+    if(t.includes("grass block"))
+        return"grass_top";
+
+    if(t.includes("red sand"))
+        return"red_sand";
+
+    if(t.includes("sand"))
+        return"sand";
+
+    if(t.includes("rocky dirt"))
+        return"rocky_dirt";
+
+    if(t.includes("messy dirt"))
+        return"coarse_dirt";
+
+    if(t.includes("dirt"))
+        return"dirt";
+
+    if(t.includes("gravel"))
+        return"gravel";
+
+    if(t.includes("packed snow"))
+        return"packed_snow";
+
+    if(t.includes("snow"))
+        return"snow";
+
+    if(t.includes("clay"))
+        return"clay";
+
+    if(t.includes("smooth stone"))
+        return"smooth_stone";
+
+    if(t.includes("messy stone"))
+        return"messy_stone";
+
+    if(t.includes("andesite"))
+        return"stone_andesite";
+
+    if(t.includes("diorite"))
+        return"stone_diorite";
+
+    if(t.includes("granite"))
+        return"stone_granite";
+
+    if(t.includes("stone"))
+        return"stone";
+
+    if(
+        (
+            m=n.match(
+                /(aspen|cedar|cherry|elm|jungle|mango|maple|palm|pear|pine|plum|spectral).*leav/
+            )
+        )
+    ){
+        return`leaves_${m[1]}`;
+    }
+
+    if(
+        (
+            m=n.match(
+                /(aspen|cedar|cherry|elm|jungle|mango|maple|palm|pear|pine|plum|spectral).*log/
+            )
+        )
+    ){
+        return`log_${m[1]}`;
+    }
+
+    if(t.includes("poppy"))
+        return"poppy";
+
+    if(
+        t.includes("oxeye daisy")||
+        t.includes("daisy")
+    )
+        return"oxeye_daisy";
+
+    if(t.includes("lily of the valley"))
+        return"lily_of_the_valley";
+
+    if(t.includes("jungle tall grass"))
+        return"jungle_tall_grass_bottom";
+
+    if(
+        t.includes("tall grass")||
+        t.includes("grass plant")
+    )
+        return"tallgrass";
+
+    return null;
+}
+
+function drawAtlasTexture(
+    texName,
+    dx,
+    dy,
+    dw,
+    dh
+){
+    if(
+        !surfaceAtlasReady||
+        !texName
+    )return false;
+
+    const i=
+        SURFACE_TEX_INDEX[texName];
+
+    if(i===undefined)
+        return false;
+
+    const sx=
+        (i%SURFACE_ATLAS_COLS)*
+        SURFACE_ATLAS_CELL;
+
+    const sy=
+        Math.floor(i/SURFACE_ATLAS_COLS)*
+        SURFACE_ATLAS_CELL;
+
+    ctx.drawImage(
+        surfaceAtlas,
+        sx,
+        sy,
+        SURFACE_ATLAS_CELL,
+        SURFACE_ATLAS_CELL,
+        dx,
+        dy,
+        dw,
+        dh
+    );
+
+    return true;
+}
+
+function createWorker(){
+
+    if(worker)
+        worker.terminate();
+
+    const blob=
+        new Blob(
+            [
+                "("+
+                workerFn.toString()+
+                ")()"
+            ],
+            {
+                type:"application/javascript"
+            }
+        );
+
+    worker=
+        new Worker(
+            URL.createObjectURL(blob)
+        );
+
+    workerSeed=null;
+
+    worker.postMessage({
+        type:"workerInit",
+        chunkSize:32,
+        itemMetadata:imd,
+        blockMetadata:bmd
+    });
+
+    worker.onmessage=e=>{
+
+        const r=e.data;
+
+        if(
+            !r||
+            r.type!=="chunkResponse"
+        )return;
+
+        for(const[k,q]of pending){
+
+            if(q.id!==r.id)
+                continue;
+
+            pending.delete(k);
+
+            const raw=r.array?.data;
+
+            const d=
+                raw instanceof Uint16Array
+                    ?raw
+                    :new Uint16Array(
+                        raw?.buffer||
+                        raw||
+                        []
+                    );
+
+            const ch={
+                cx:q.cx,
+                cy:q.cy,
+                cz:q.cz,
+                data:d
+            };
+
+            chunks.set(k,ch);
+
+            while(chunks.size>MAX_CACHE){
+                chunks.delete(
+                    chunks.keys().next().value
+                );
+            }
+
+            q.resolve(ch);
+            break;
+        }
+    };
+
+    worker.onerror=e=>{
+        error="Worker error";
+        console.error(e);
+        updateState();
+    };
+}
+
+function setSeed(s){
+
+    if(
+        String(workerSeed)===
+        String(s)
+    )return;
+
+    for(const q of pending.values()){
+        try{
+            q.reject(
+                new Error("Seed changed")
+            );
+        }catch(_){}
+    }
+
+    pending.clear();
+    chunks.clear();
+    chunkStatsCache.clear();
+
+    invalidateMap();
+    invalidateOres();
+    invalidateStructures();
+
+    worker.postMessage({
+        type:"createSeed",
+        seed:s,
+        dN:1,
+        oN:1
+    });
+
+    workerSeed=s;
+}
+
+function chunk(s,cx,cy,cz){
+
+    const k=key(s,cx,cy,cz);
+
+    if(chunks.has(k))
+        return Promise.resolve(
+            chunks.get(k)
+        );
+
+    if(pending.has(k))
+        return pending.get(k).promise;
+
+    setSeed(s);
+
+    const id=
+        `${cx*32}|${cy*32}|${cz*32}|${s}`;
+
+    let resolvePromise;
+    let rejectPromise;
+
+    const promise=
+        new Promise((a,b)=>{
+            resolvePromise=a;
+            rejectPromise=b;
+        });
+
+    pending.set(k,{
+        id,
+        cx,
+        cy,
+        cz,
+        resolve:resolvePromise,
+        reject:rejectPromise,
+        promise
+    });
+
+    worker.postMessage({
+        id,
+        type:"chunk",
+        array:{
+            data:new Uint16Array(32768),
+            shape:[32,32,32],
+            stride:[1024,32,1],
+            offset:0
+        }
+    });
+
+    return promise;
+}
+
+function getBlock(s,x,y,z){
+
+    const cx=floorDiv(x,CS);
+    const cy=floorDiv(y,CS);
+    const cz=floorDiv(z,CS);
+
+    const ch=
+        chunks.get(
+            key(s,cx,cy,cz)
+        );
+
+    if(!ch)return null;
+
+    const lx=mod(x,CS);
+    const ly=mod(y,CS);
+    const lz=mod(z,CS);
+
+    return ch.data[
+        lx*1024+
+        ly*32+
+        lz
+    ];
+}
+
+function topBlockDetailed(s,x,z){
+
+    const cx=floorDiv(x,CS);
+    const cz=floorDiv(z,CS);
+    const lx=mod(x,CS);
+    const lz=mod(z,CS);
+
+    const base=
+        lx*1024+
+        lz;
+
+    let deco=0;
+
+    for(
+        let cy=SURF_MAX;
+        cy>=SURF_MIN;
+        cy--
+    ){
+
+        const ch=
+            chunks.get(
+                key(s,cx,cy,cz)
+            );
+
+        if(!ch)continue;
+
+        for(
+            let ly=31;
+            ly>=0;
+            ly--
+        ){
+
+            const id=
+                ch.data[
+                    base+
+                    ly*32
+                ];
+
+            const wy=
+                cy*32+
+                ly;
+
+            if(isAir(id))
+                continue;
+
+            if(isDecoration(id)){
+
+                if(!deco)
+                    deco=id;
+
+                continue;
+            }
+
+            return{
+                id,
+                y:wy,
+                deco
+            };
+        }
+    }
+
+    return{
+        id:0,
+        y:SURF_MIN*32,
+        deco
+    };
+}
+
+function surfaceArray(s,cx,cz,r){
+
+    const size=
+        r*2+1;
+
+    const out=
+        Array.from(
+            {length:size},
+            ()=>new Array(size)
+        );
+
+    for(let row=0;row<size;row++){
+
+        const x=
+            cx+r-row;
+
+        for(let col=0;col<size;col++){
+
+            const z=
+                cz+r-col;
+
+            const t=
+                topBlockDetailed(
+                    s,
+                    x,
+                    z
+                );
+
+            out[row][col]={
+                x,
+                z,
+                id:t.id,
+                y:t.y,
+                deco:t.deco||0
+            };
+        }
+    }
+
+    return out;
+}
+
+function layerArray(s,cx,cz,r,y){
+
+    const size=
+        r*2+1;
+
+    const out=
+        Array.from(
+            {length:size},
+            ()=>new Array(size)
+        );
+
+    for(let row=0;row<size;row++){
+
+        const x=
+            cx+r-row;
+
+        for(let col=0;col<size;col++){
+
+            const z=
+                cz+r-col;
+
+            const id=
+                getBlock(
+                    s,
+                    x,
+                    y,
+                    z
+                );
+
+            out[row][col]={
+                x,
+                z,
+                id:id??0,
+                y,
+                deco:0
+            };
+        }
+    }
+
+    return out;
+}
+
+function invalidateMap(){
+
+    mapData=null;
+
+    mapCX=null;
+    mapCZ=null;
+    mapSeed=null;
+
+    mapModeBuilt=null;
+    mapYBuilt=null;
+}
+
+function mapValid(cx,cz,s,m,y){
+
+    return(
+        !!mapData&&
+        mapCX===cx&&
+        mapCZ===cz&&
+        String(mapSeed)===String(s)&&
+        mapModeBuilt===m&&
+        (
+            m!=="layer"||
+            mapYBuilt===y
+        )
+    );
+}
+
+async function batches(
+    jobs,
+    size=6,
+    pause=4
+){
+
+    for(
+        let i=0;
+        i<jobs.length;
+        i+=size
+    ){
+
+        await Promise.all(
+            jobs
+                .slice(i,i+size)
+                .map(
+                    j=>
+                        chunk(
+                            j.s,
+                            j.cx,
+                            j.cy,
+                            j.cz
+                        )
+                )
+        );
+
+        await sleep(pause);
+    }
+}
+
+function queueMap(force){
+
+    if(
+        !ready||
+        !current
+    )return;
+
+    const cx=
+        snap(
+            Math.floor(current.x)
+        );
+
+    const cz=
+        snap(
+            Math.floor(current.z)
+        );
+
+    const s=seed();
+    const y=layerY();
+
+    if(
+        !force&&
+        mapValid(
+            cx,
+            cz,
+            s,
+            mode,
+            y
+        )
+    )return;
+
+    if(buildRun){
+        buildQueued=true;
+        return;
+    }
+
+    buildMap(
+        cx,
+        cz,
+        radius+MARGIN,
+        s,
+        mode,
+        y
+    );
+}
+
+async function buildMap(
+    cx,
+    cz,
+    r,
+    s,
+    m,
+    y
+){
+
+    const token=
+        ++buildToken;
+
+    buildRun=true;
+    buildQueued=false;
+
+    updateState();
+
+    const minX=
+        floorDiv(cx-r,CS);
+
+    const maxX=
+        floorDiv(cx+r,CS);
+
+    const minZ=
+        floorDiv(cz-r,CS);
+
+    const maxZ=
+        floorDiv(cz+r,CS);
+
+    const minY=
+        m==="surface"
+            ?SURF_MIN
+            :floorDiv(y,CS);
+
+    const maxY=
+        m==="surface"
+            ?SURF_MAX
+            :minY;
+
+    const jobs=[];
+
+    for(let x=minX;x<=maxX;x++){
+
+        for(let z=minZ;z<=maxZ;z++){
+
+            for(let yy=minY;yy<=maxY;yy++){
+
+                jobs.push({
+                    s,
+                    cx:x,
+                    cy:yy,
+                    cz:z
+                });
+            }
+        }
+    }
+
+    try{
+
+        await batches(jobs);
+
+        if(token!==buildToken)
+            return;
+
+        const built=
+            m==="surface"
+                ?surfaceArray(
+                    s,
+                    cx,
+                    cz,
+                    r
+                )
+                :layerArray(
+                    s,
+                    cx,
+                    cz,
+                    r,
+                    y
+                );
+
+        if(token!==buildToken)
+            return;
+
+        mapData=built;
+
+        mapCX=cx;
+        mapCZ=cz;
+
+        mapSeed=s;
+        mapModeBuilt=m;
+
+        mapYBuilt=
+            m==="layer"
+                ?y
+                :null;
+
+        error=null;
+
+    }catch(e){
+
+        if(e?.message!=="Seed changed"){
+
+            error=
+                e.message||
+                String(e);
+
+            console.error(e);
+        }
+
+    }finally{
+
+        if(token===buildToken){
+
+            buildRun=false;
+
+            updateState();
+
+            if(buildQueued){
+
+                buildQueued=false;
+
+                setTimeout(
+                    ()=>queueMap(true),
+                    100
+                );
+            }
+        }
+    }
+}
+
+function invalidateOres(){
+
+    y1OrePts=[];
+    allOrePts=[];
+
+    oreCX=null;
+    oreCZ=null;
+    oreR=null;
+    oreSeed=null;
+    oreBaseY=null;
+}
+
+function oresValid(cx,cz,r,s,y){
+
+    if(
+        oreCX!==cx||
+        oreCZ!==cz||
+        oreR!==r||
+        String(oreSeed)!==String(s)
+    )return false;
+
+    if(
+        showY1&&
+        oreBaseY!==y
+    )return false;
+
+    if(
+        showAllOres&&
+        !allOrePts.length
+    )return false;
+
+    return true;
+}
+
+function queueOres(force){
+
+    if(
+        !ready||
+        !current||
+        (
+            !showY1&&
+            !showAllOres
+        )
+    )return;
+
+    const cx=
+        snap(
+            Math.floor(current.x)
+        );
+
+    const cz=
+        snap(
+            Math.floor(current.z)
+        );
+
+    const r=
+        radius+MARGIN;
+
+    const s=seed();
+    const y=layerY();
+
+    if(
+        !force&&
+        oresValid(
+            cx,
+            cz,
+            r,
+            s,
+            y
+        )
+    )return;
+
+    if(oreRun){
+
+        oreQueued=true;
+        return;
+    }
+
+    buildOres(
+        cx,
+        cz,
+        r,
+        s,
+        y
+    );
+}
+
+function scanY1(s,cx,cz,r,y){
+
+    const out=[];
+
+    for(let x=cx-r;x<=cx+r;x++){
+
+        for(let z=cz-r;z<=cz+r;z++){
+
+            const id=
+                getBlock(
+                    s,
+                    x,
+                    y,
+                    z
+                );
+
+            if(
+                id!==null&&
+                isAnyOre(id)
+            ){
+                out.push({
+                    x,
+                    y,
+                    z,
+                    id
+                });
+            }
+        }
+    }
+
+    return out;
+}
+
+function scanAllOreChunk(
+    ch,
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    out
+){
+
+    for(let i=0;i<ch.data.length;i++){
+
+        const id=ch.data[i];
+
+        if(!isAllOreTarget(id))
+            continue;
+
+        const lx=
+            Math.floor(i/1024);
+
+        const rem=
+            i-lx*1024;
+
+        const ly=
+            Math.floor(rem/32);
+
+        const lz=
+            rem-ly*32;
+
+        const x=
+            ch.cx*CS+lx;
+
+        const y=
+            ch.cy*CS+ly;
+
+        const z=
+            ch.cz*CS+lz;
+
+        if(
+            x<minX||
+            x>maxX||
+            z<minZ||
+            z>maxZ
+        )continue;
+
+        out.push({
+            x,
+            y,
+            z,
+            id
+        });
+    }
+}
+
+async function buildOres(
+    cx,
+    cz,
+    r,
+    s,
+    y
+){
+
+    const token=
+        ++oreToken;
+
+    oreRun=true;
+    oreQueued=false;
+
+    updateState();
+
+    const minCX=
+        floorDiv(cx-r,CS);
+
+    const maxCX=
+        floorDiv(cx+r,CS);
+
+    const minCZ=
+        floorDiv(cz-r,CS);
+
+    const maxCZ=
+        floorDiv(cz+r,CS);
+
+    const jobs=[];
+
+    if(showY1){
+
+        const cy=
+            floorDiv(y+1,CS);
+
+        for(let x=minCX;x<=maxCX;x++){
+
+            for(let z=minCZ;z<=maxCZ;z++){
+
+                jobs.push({
+                    s,
+                    cx:x,
+                    cy,
+                    cz:z
+                });
+            }
+        }
+    }
+
+    if(showAllOres){
+
+        for(let x=minCX;x<=maxCX;x++){
+
+            for(let z=minCZ;z<=maxCZ;z++){
+
+                for(const cy of ALL_ORE_LEVELS){
+
+                    jobs.push({
+                        s,
+                        cx:x,
+                        cy,
+                        cz:z
+                    });
+                }
+            }
+        }
+    }
+
+    const uniq=new Map();
+
+    for(const j of jobs){
+        uniq.set(
+            `${j.cx}|${j.cy}|${j.cz}`,
+            j
+        );
+    }
+
+    try{
+
+        await batches(
+            [...uniq.values()],
+            4,
+            7
+        );
+
+        if(token!==oreToken)
+            return;
+
+        const y1=
+            showY1
+                ?scanY1(
+                    s,
+                    cx,
+                    cz,
+                    r,
+                    y+1
+                )
+                :[];
+
+        const all=[];
+
+        if(showAllOres){
+
+            const minX=cx-r;
+            const maxX=cx+r;
+
+            const minZ=cz-r;
+            const maxZ=cz+r;
+
+            let c=0;
+
+            for(let x=minCX;x<=maxCX;x++){
+
+                for(let z=minCZ;z<=maxCZ;z++){
+
+                    for(const cy of ALL_ORE_LEVELS){
+
+                        const ch=
+                            chunks.get(
+                                key(
+                                    s,
+                                    x,
+                                    cy,
+                                    z
+                                )
+                            );
+
+                        if(ch){
+                            scanAllOreChunk(
+                                ch,
+                                minX,
+                                maxX,
+                                minZ,
+                                maxZ,
+                                all
+                            );
+                        }
+
+                        if(++c%3===0)
+                            await sleep(0);
+                    }
+                }
+            }
+        }
+
+        if(token!==oreToken)
+            return;
+
+        y1OrePts=y1;
+        allOrePts=all;
+
+        oreCX=cx;
+        oreCZ=cz;
+        oreR=r;
+        oreSeed=s;
+        oreBaseY=y;
+
+    }catch(e){
+
+        if(e?.message!=="Seed changed")
+            console.error(e);
+
+    }finally{
+
+        if(token===oreToken){
+
+            oreRun=false;
+
+            updateState();
+
+            if(oreQueued){
+
+                oreQueued=false;
+
+                setTimeout(
+                    ()=>queueOres(true),
+                    120
+                );
+            }
+        }
+    }
+}
+
+function invalidateStructures(){
+
+    structurePts=[];
+
+    structCX=null;
+    structCZ=null;
+    structR=null;
+    structSeed=null;
+}
+
+function structuresValid(cx,cz,r,s){
+
+    return(
+        structCX===cx&&
+        structCZ===cz&&
+        structR===r&&
+        String(structSeed)===String(s)
+    );
+}
+
+function queueStructures(force){
+
+    if(
+        !ready||
+        !current||
+        !showSpawner
+    )return;
+
+    const cx=
+        snap(
+            Math.floor(current.x)
+        );
+
+    const cz=
+        snap(
+            Math.floor(current.z)
+        );
+
+    const r=
+        radius+MARGIN;
+
+    const s=seed();
+
+    if(
+        !force&&
+        structuresValid(
+            cx,
+            cz,
+            r,
+            s
+        )
+    )return;
+
+    if(structRun){
+
+        structQueued=true;
+        return;
+    }
+
+    buildStructures(
+        cx,
+        cz,
+        r,
+        s
+    );
+}
+
+function scanStructureChunk(
+    ch,
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    spawners,
+    magma
+){
+
+    for(let i=0;i<ch.data.length;i++){
+
+        const id=ch.data[i];
+
+        if(
+            !isSpawner(id)&&
+            !isMagma(id)
+        )continue;
+
+        const lx=
+            Math.floor(i/1024);
+
+        const rem=
+            i-lx*1024;
+
+        const ly=
+            Math.floor(rem/32);
+
+        const lz=
+            rem-ly*32;
+
+        const x=
+            ch.cx*CS+lx;
+
+        const y=
+            ch.cy*CS+ly;
+
+        const z=
+            ch.cz*CS+lz;
+
+        if(
+            x<minX||
+            x>maxX||
+            z<minZ||
+            z>maxZ
+        )continue;
+
+        const p={
+            x,
+            y,
+            z,
+            id
+        };
+
+        if(isSpawner(id))
+            spawners.push(p);
+
+        if(isMagma(id))
+            magma.push(p);
+    }
+}
+
+function clusterStructures(
+    spawners,
+    magma
+){
+
+    const result=[];
+
+    const used=
+        new Array(
+            spawners.length
+        ).fill(false);
+
+    for(let i=0;i<spawners.length;i++){
+
+        if(used[i])
+            continue;
+
+        const q=[i];
+        const cluster=[];
+
+        used[i]=true;
+
+        while(q.length){
+
+            const idx=q.pop();
+
+            const a=
+                spawners[idx];
+
+            cluster.push(a);
+
+            for(let j=0;j<spawners.length;j++){
+
+                if(used[j])
+                    continue;
+
+                const b=
+                    spawners[j];
+
+                if(
+                    Math.hypot(
+                        a.x-b.x,
+                        a.z-b.z
+                    )<=24&&
+                    Math.abs(
+                        a.y-b.y
+                    )<=20
+                ){
+                    used[j]=true;
+                    q.push(j);
+                }
+            }
+        }
+
+        if(cluster.length<4)
+            continue;
+
+        const cx=
+            cluster.reduce(
+                (s,p)=>s+p.x,
+                0
+            )/cluster.length;
+
+        const cy=
+            cluster.reduce(
+                (s,p)=>s+p.y,
+                0
+            )/cluster.length;
+
+        const cz=
+            cluster.reduce(
+                (s,p)=>s+p.z,
+                0
+            )/cluster.length;
+
+        let magmaCount=0;
+
+        for(const m of magma){
+
+            if(
+                Math.hypot(
+                    m.x-cx,
+                    m.z-cz
+                )<=22&&
+                Math.abs(
+                    m.y-cy
+                )<=24
+            ){
+                magmaCount++;
+            }
+
+            if(magmaCount>=4)
+                break;
+        }
+
+        if(magmaCount<1)
+            continue;
+
+        result.push({
+            x:cx,
+            y:cy,
+            z:cz,
+            spawners:cluster.length,
+            magma:magmaCount
+        });
+    }
+
+    return result;
+}
+
+async function buildStructures(
+    cx,
+    cz,
+    r,
+    s
+){
+
+    const token=
+        ++structToken;
+
+    structRun=true;
+    structQueued=false;
+
+    updateState();
+
+    const minCX=
+        floorDiv(cx-r,CS);
+
+    const maxCX=
+        floorDiv(cx+r,CS);
+
+    const minCZ=
+        floorDiv(cz-r,CS);
+
+    const maxCZ=
+        floorDiv(cz+r,CS);
+
+    const jobs=[];
+
+    for(let x=minCX;x<=maxCX;x++){
+
+        for(let z=minCZ;z<=maxCZ;z++){
+
+            for(
+                let cy=STRUCT_MIN;
+                cy<=STRUCT_MAX;
+                cy++
+            ){
+
+                jobs.push({
+                    s,
+                    cx:x,
+                    cy,
+                    cz:z
+                });
+            }
+        }
+    }
+
+    try{
+
+        await batches(
+            jobs,
+            3,
+            9
+        );
+
+        if(token!==structToken)
+            return;
+
+        const sp=[];
+        const mg=[];
+
+        const minX=cx-r;
+        const maxX=cx+r;
+
+        const minZ=cz-r;
+        const maxZ=cz+r;
+
+        let c=0;
+
+        for(let x=minCX;x<=maxCX;x++){
+
+            for(let z=minCZ;z<=maxCZ;z++){
+
+                for(
+                    let cy=STRUCT_MIN;
+                    cy<=STRUCT_MAX;
+                    cy++
+                ){
+
+                    const ch=
+                        chunks.get(
+                            key(
+                                s,
+                                x,
+                                cy,
+                                z
+                            )
+                        );
+
+                    if(ch){
+                        scanStructureChunk(
+                            ch,
+                            minX,
+                            maxX,
+                            minZ,
+                            maxZ,
+                            sp,
+                            mg
+                        );
+                    }
+
+                    if(++c%3===0)
+                        await sleep(0);
+                }
+            }
+        }
+
+        if(token!==structToken)
+            return;
+
+        structurePts=
+            clusterStructures(
+                sp,
+                mg
+            );
+
+        structCX=cx;
+        structCZ=cz;
+        structR=r;
+        structSeed=s;
+
+    }catch(e){
+
+        if(e?.message!=="Seed changed")
+            console.error(e);
+
+    }finally{
+
+        if(token===structToken){
+
+            structRun=false;
+
+            updateState();
+
+            if(structQueued){
+
+                structQueued=false;
+
+                setTimeout(
+                    ()=>queueStructures(true),
+                    150
+                );
+            }
+        }
+    }
+}
+
+function statsKey(s,cx,cy,cz){
+    return`${s}|${cx}|${cy}|${cz}`;
+}
+
+function countChunk(ch){
+
+    const byId=new Map();
+
+    let air=0;
+
+    for(let i=0;i<ch.data.length;i++){
+
+        const id=
+            Number(ch.data[i]);
+
+        byId.set(
+            id,
+            (byId.get(id)||0)+1
+        );
+
+        if(isAir(id))
+            air++;
+    }
+
+    const rows=
+        [...byId.entries()]
+            .map(
+                ([id,count])=>({
+                    id,
+                    name:nameOf(id),
+                    count
+                })
+            )
+            .sort(
+                (a,b)=>
+                    b.count-a.count||
+                    a.name.localeCompare(b.name)
+            );
+
+    return{
+        rows,
+        air,
+        solid:32768-air,
+        total:32768
+    };
+}
+
+function renderChunkStats(
+    stats,
+    cx,
+    cy,
+    cz
+){
+
+    if(
+        !chunkListEl||
+        !chunkSummaryEl
+    )return;
+
+    chunkSummaryEl.textContent=
+        ` Chunk ${cx}, ${cy}, ${cz} • ${stats.rows.length} Blockarten`;
+
+    chunkListEl.textContent="";
+
+    const info=
+        document.createElement("div");
+
+    info.style.cssText=
+        "font:700 9px Consolas;color:#8fa2b7;margin-bottom:7px";
+
+    info.textContent=
+        `ALLE ${stats.total.toLocaleString("de-DE")} BLOCKPOSITIONEN • Luft ${stats.air.toLocaleString("de-DE")} • Fest ${stats.solid.toLocaleString("de-DE")}`;
+
+    chunkListEl.appendChild(info);
+
+    for(const r of stats.rows){
+
+        const row=
+            document.createElement("div");
+
+        row.style.cssText=
+            "display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.045);font:700 9px Consolas";
+
+        const n=
+            document.createElement("span");
+
+        n.style.cssText=
+            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c8d7e5";
+
+        n.textContent=
+            `${r.name} [${r.id}]`;
+
+        const c=
+            document.createElement("span");
+
+        c.style.cssText=
+            "color:#fff;flex:0 0 auto";
+
+        c.textContent=
+            r.count.toLocaleString("de-DE");
+
+        row.append(n,c);
+
+        chunkListEl.appendChild(row);
+    }
+}
+
+async function queueChunkStats(force=false){
+
+    if(
+        !ready||
+        !current||
+        !chunkDetails?.open
+    )return;
+
+    const s=seed();
+
+    const cx=
+        floorDiv(
+            Math.floor(current.x),
+            CS
+        );
+
+    const cy=
+        floorDiv(
+            Math.floor(current.y),
+            CS
+        );
+
+    const cz=
+        floorDiv(
+            Math.floor(current.z),
+            CS
+        );
+
+    const k=
+        statsKey(
+            s,
+            cx,
+            cy,
+            cz
+        );
+
+    if(
+        !force&&
+        lastChunkStatsKey===k&&
+        chunkStatsCache.has(k)
+    )return;
+
+    lastChunkStatsKey=k;
+
+    const token=
+        ++chunkStatsToken;
+
+    chunkSummaryEl.textContent=
+        ` Chunk ${cx}, ${cy}, ${cz} • lade…`;
+
+    chunkListEl.textContent="";
+
+    try{
+
+        let stats=
+            chunkStatsCache.get(k);
+
+        if(!stats){
+
+            const ch=
+                await chunk(
+                    s,
+                    cx,
+                    cy,
+                    cz
+                );
+
+            if(token!==chunkStatsToken)
+                return;
+
+            stats=
+                countChunk(ch);
+
+            chunkStatsCache.set(
+                k,
+                stats
+            );
+
+            while(chunkStatsCache.size>24){
+
+                chunkStatsCache.delete(
+                    chunkStatsCache.keys().next().value
+                );
+            }
+        }
+
+        if(token!==chunkStatsToken)
+            return;
+
+        renderChunkStats(
+            stats,
+            cx,
+            cy,
+            cz
+        );
+
+    }catch(_){
+
+        if(token===chunkStatsToken){
+
+            chunkSummaryEl.textContent=
+                " Chunk-Liste konnte nicht geladen werden";
+        }
+    }
+}
+
+async function init(){
+
+    try{
+
+        updateState(
+            "ENGINE LOAD"
+        );
+
+        const[w,b,i]=
+            await Promise.all([
+                getText(`${BASE}/webWorkerBloxd.js`),
+                getText(`${BASE}/blockMetadata.js`),
+                getText(`${BASE}/itemMetadata.js`)
+            ]);
+
+        workerFn=
+            extract(
+                w,
+                "webWorkerCodeFunction"
+            );
+
+        bmd=
+            extract(
+                b,
+                "bmd"
+            );
+
+        imd=
+            extract(
+                i,
+                "imd"
+            );
+
+        if(
+            !workerFn||
+            !bmd||
+            !imd
+        ){
+            throw new Error(
+                "Generator konnte nicht geladen werden"
+            );
+        }
+
+        buildIndex();
+        createWorker();
+
+        ready=true;
+        error=null;
+
+        updateState();
+
+        if(current)
+            queueMap(true);
+
+    }catch(e){
+
+        ready=false;
+
+        error=
+            e.message||
+            String(e);
+
+        console.error(e);
+
+        updateState();
+    }
+}
+
+function button(
+    t,
+    title,
+    fn,
+    wide=false
+){
+
+    const b=
+        document.createElement("button");
+
+    b.textContent=t;
+    b.title=title;
+
+    b.style.cssText=
+        `height:28px;min-width:${wide?"60px":"28px"};border:1px solid #26384a;border-radius:7px;background:#0b1722;color:#eaf4ff;font:800 10px Arial;cursor:pointer;padding:0 8px;`;
+
+    b.addEventListener(
+        "click",
+        fn
+    );
+
+    return b;
+}
+
+function active(
+    b,
+    on,
+    color="#57cfff"
+){
+
+    if(!b)return;
+
+    b.style.background=
+        on
+            ?"#173850"
+            :"#0b1722";
+
+    b.style.borderColor=
+        on
+            ?color
+            :"#26384a";
+
+    b.style.color=
+        on
+            ?"#dff8ff"
+            :"#eaf4ff";
+}
+
+function styleButtons(){
+
+    if(!mapBtn)return;
+
+    yBtn.textContent=
+        current
+            ?`Y ${layerY()}`
+            :"Y";
+
+    active(
+        mapBtn,
+        mode==="surface"
+    );
+
+    active(
+        yBtn,
+        mode==="layer"
+    );
+
+    active(
+        y1Btn,
+        showY1,
+        "#ffd166"
+    );
+
+    active(
+        allBtn,
+        showAllOres,
+        "#ff5f6d"
+    );
+
+    active(
+        spawnerBtn,
+        showSpawner,
+        "#c85cff"
+    );
+}
+
+function setMode(m){
+
+    if(mode===m)return;
+
+    mode=m;
+
+    invalidateMap();
+    styleButtons();
+    queueMap(true);
+}
+
+function toggleY1(){
+
+    showY1=!showY1;
+
+    invalidateOres();
+    styleButtons();
+
+    if(
+        showY1||
+        showAllOres
+    ){
+        queueOres(true);
+    }
+}
+
+function toggleAll(){
+
+    showAllOres=
+        !showAllOres;
+
+    invalidateOres();
+    styleButtons();
+
+    if(
+        showY1||
+        showAllOres
+    ){
+        queueOres(true);
+    }
+}
+
+function toggleSpawner(){
+
+    showSpawner=
+        !showSpawner;
+
+    invalidateStructures();
+    styleButtons();
+
+    if(showSpawner)
+        queueStructures(true);
+}
+
+function nextIn(){
+
+    const a=
+        ZOOMS.filter(
+            v=>v<radius
+        );
+
+    return a.length
+        ?a[a.length-1]
+        :radius;
+}
+
+function nextOut(){
+
+    const a=
+        ZOOMS.filter(
+            v=>v>radius
+        );
+
+    return a.length
+        ?a[0]
+        :radius;
+}
+
+function setRadius(r){
+
+    if(r===radius)return;
+
+    radius=r;
+
+    radiusEl.textContent=
+        `R ${radius}`;
+
+    invalidateMap();
+    invalidateOres();
+    invalidateStructures();
+
+    queueMap(true);
+
+    if(
+        showY1||
+        showAllOres
+    ){
+        queueOres(true);
+    }
+
+    if(showSpawner)
+        queueStructures(true);
+}
+
+function updateText(){
+
+    if(!statusEl)return;
+
+    if(!current){
+
+        statusEl.textContent=
+            "WAITING FOR POSITION";
+
+        statusEl.style.color=
+            "#ffd166";
+
+        coordsEl.textContent=
+            "X ---   Y ---   Z ---";
+
+        styleButtons();
+
+        return;
+    }
+
+    const stale=
+        performance.now()-
+        lastSeen>
+        1800;
+
+    statusEl.textContent=
+        stale
+            ?"POSITION PAUSED"
+            :"POSITION LIVE";
+
+    statusEl.style.color=
+        stale
+            ?"#ffd166"
+            :"#52ff93";
+
+    coordsEl.textContent=
+        `X ${current.x.toFixed(2)}   Y ${current.y.toFixed(2)}   Z ${current.z.toFixed(2)}`;
+
+    styleButtons();
+}
+
+function updateState(force=null){
+
+    if(
+        !stateEl||
+        !seedEl
+    )return;
+
+    seedEl.textContent=
+        `SEED ${seed()}`;
+
+    if(force){
+
+        stateEl.textContent=force;
+        stateEl.style.color="#ffd166";
+
+        return;
+    }
+
+    if(error){
+
+        stateEl.textContent=
+            "MAP ERROR";
+
+        stateEl.style.color=
+            "#ff6b73";
+
+        return;
+    }
+
+    if(!ready){
+
+        stateEl.textContent=
+            "ENGINE LOAD";
+
+        stateEl.style.color=
+            "#ffd166";
+
+        return;
+    }
+
+    if(
+        buildRun||
+        oreRun||
+        structRun
+    ){
+
+        stateEl.textContent=
+            structRun
+                ?"SPAWNER SCAN"
+                :oreRun
+                    ?"ORES LOADING"
+                    :mode==="surface"
+                        ?"MAP LOADING"
+                        :`Y ${layerY()} LOADING`;
+
+        stateEl.style.color=
+            "#ffd166";
+
+        return;
+    }
+
+    stateEl.textContent=
+        mapData
+            ?mode==="surface"
+                ?"MAP READY"
+                :`Y ${mapYBuilt} READY`
+            :"MAP WAIT";
+
+    stateEl.style.color=
+        mapData
+            ?"#52ff93"
+            :"#8fa2b7";
+}
+
+function ui(){
+
+    if(
+        root||
+        !document.body
+    )return;
+
+    document
+        .getElementById(
+            "bloxd-position-minimap"
+        )
+        ?.remove();
+
+    root=
+        document.createElement("div");
+
+    root.id=
+        "bloxd-position-minimap";
+
+    root.style.cssText=
+        `position:fixed;right:18px;top:150px;width:${PANEL_W}px;height:${PANEL_H}px;max-height:calc(100vh - 170px);z-index:2147483646;background:rgba(7,16,25,.96);border:1px solid #26394d;border-radius:14px;box-shadow:0 16px 45px rgba(0,0,0,.42);color:#eef6ff;font-family:Arial,sans-serif;overflow:hidden;user-select:none;`;
+
+    const top=
+        document.createElement("div");
+
+    top.style.cssText=
+        "height:48px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:7px 10px 4px;";
+
+    const titles=
+        document.createElement("div");
+
+    titles.style.cssText=
+        "flex:1";
+
+    const title=
+        document.createElement("div");
+
+    title.textContent=
+        "MINING MAP";
+
+    title.style.cssText=
+        "font:900 13px Arial";
+
+    statusEl=
+        document.createElement("div");
+
+    statusEl.textContent=
+        "WAITING FOR POSITION";
+
+    statusEl.style.cssText=
+        "font:800 9px Consolas;color:#ffd166;margin-top:2px";
+
+    titles.append(
+        title,
+        statusEl
+    );
+
+    const minBtn=
+        button(
+            "−",
+            "Minimieren",
+            ()=>{
+                minimized=!minimized;
+
+                controls.style.display=
+                    minimized
+                        ?"none"
+                        :"flex";
+
+                scrollArea.style.display=
+                    minimized
+                        ?"none"
+                        :"block";
+
+                root.style.height=
+                    minimized
+                        ?"48px"
+                        :`${PANEL_H}px`;
+            }
+        );
+
+    top.append(
+        titles,
+        minBtn
+    );
+
+    controls=
+        document.createElement("div");
+
+    controls.style.cssText=
+        "min-height:76px;box-sizing:border-box;display:flex;align-items:center;gap:5px;padding:4px 10px 7px;border-bottom:1px solid #1f3142;flex-wrap:wrap";
+
+    mapBtn=
+        button(
+            "MAP",
+            "Oberfläche mit Bloxd-Texturen",
+            ()=>setMode("surface"),
+            true
+        );
+
+    yBtn=
+        button(
+            "Y",
+            "Aktuelle Höhe - klare Erzfarben",
+            ()=>setMode("layer"),
+            true
+        );
+
+    y1Btn=
+        button(
+            "Y+1",
+            "Erze 1 Block über dir",
+            toggleY1,
+            true
+        );
+
+    allBtn=
+        button(
+            "ALLE ERZE",
+            "Nur Diamond + Moonstone",
+            toggleAll,
+            true
+        );
+
+    radiusEl=
+        document.createElement("div");
+
+    radiusEl.style.cssText=
+        "margin-left:auto;font:800 10px Consolas;color:#a9bdd0;min-width:33px;text-align:center";
+
+    radiusEl.textContent=
+        `R ${radius}`;
+
+    controls.append(
+        mapBtn,
+        yBtn,
+        y1Btn,
+        allBtn,
+        radiusEl,
+
+        button(
+            "−",
+            "Rauszoomen",
+            ()=>setRadius(nextOut())
+        ),
+
+        button(
+            "+",
+            "Reinzoomen",
+            ()=>setRadius(nextIn())
+        )
+    );
+
+    scrollArea=
+        document.createElement("div");
+
+    scrollArea.style.cssText=
+        "height:calc(100% - 124px);overflow-y:auto;overflow-x:hidden;padding:8px 12px 12px;box-sizing:border-box;scrollbar-width:thin;";
+
+    const meta=
+        document.createElement("div");
+
+    meta.style.cssText=
+        "display:flex;justify-content:space-between;margin-bottom:6px;font:800 8px Consolas";
+
+    seedEl=
+        document.createElement("span");
+
+    seedEl.style.color=
+        "#8fa2b7";
+
+    stateEl=
+        document.createElement("span");
+
+    meta.append(
+        seedEl,
+        stateEl
+    );
+
+    canvas=
+        document.createElement("canvas");
+
+    canvas.width=MAP_W;
+    canvas.height=MAP_W;
+
+    canvas.style.cssText=
+        `display:block;width:${MAP_W}px;height:${MAP_W}px;background:#07111a;border:1px solid #203548;border-radius:9px;image-rendering:pixelated`;
+
+    ctx=
+        canvas.getContext(
+            "2d",
+            {alpha:false}
+        );
+
+    ctx.imageSmoothingEnabled=false;
+
+    coordsEl=
+        document.createElement("div");
+
+    coordsEl.style.cssText=
+        "margin-top:8px;font:700 10px Consolas;color:#b7c9da";
+
+    const foot=
+        document.createElement("div");
+
+    foot.textContent=
+        "+Z ←          +X ↑          → -Z";
+
+    foot.style.cssText=
+        "margin-top:4px;font:800 9px Consolas;color:#7fa0bb;white-space:pre";
+
+    const extra=
+        document.createElement("div");
+
+    extra.style.cssText=
+        "margin-top:16px;padding-top:12px;border-top:1px solid #1f3142";
+
+    const extraTitle=
+        document.createElement("div");
+
+    extraTitle.textContent=
+        "EXTRAS";
+
+    extraTitle.style.cssText=
+        "font:900 10px Arial;color:#91a8bd;margin-bottom:8px;letter-spacing:.5px";
+
+    spawnerBtn=
+        button(
+            "SPAWNER",
+            "4-Spawner-Magma-Strukturen",
+            toggleSpawner,
+            true
+        );
+
+    spawnerBtn.style.width="100%";
+    spawnerBtn.style.height="32px";
+
+    const hint=
+        document.createElement("div");
+
+    hint.textContent=
+        "Magma-Strukturen mit mindestens 4 nahen Spawnern.";
+
+    hint.style.cssText=
+        "font:700 8px Consolas;color:#6f879b;line-height:1.35;margin:6px 1px 12px";
+
+    chunkDetails=
+        document.createElement("details");
+
+    chunkDetails.style.cssText=
+        "border:1px solid #213548;border-radius:8px;background:#09141e;overflow:hidden";
+
+    const summary=
+        document.createElement("summary");
+
+    summary.style.cssText=
+        "cursor:pointer;padding:9px 10px;font:900 10px Arial;color:#dbeaff;list-style-position:inside";
+
+    chunkSummaryEl=
+        document.createElement("span");
+
+    chunkSummaryEl.textContent=
+        " ALLE BLÖCKE IM AKTUELLEN CHUNK";
+
+    summary.appendChild(
+        chunkSummaryEl
+    );
+
+    chunkListEl=
+        document.createElement("div");
+
+    chunkListEl.style.cssText=
+        "padding:0 10px 10px;max-height:300px;overflow:auto";
+
+    chunkDetails.append(
+        summary,
+        chunkListEl
+    );
+
+    chunkDetails.addEventListener(
+        "toggle",
+        ()=>{
+            if(chunkDetails.open)
+                queueChunkStats(true);
+        }
+    );
+
+    extra.append(
+        extraTitle,
+        spawnerBtn,
+        hint,
+        chunkDetails
+    );
+
+    scrollArea.append(
+        meta,
+        canvas,
+        coordsEl,
+        foot,
+        extra
+    );
+
+    root.append(
+        top,
+        controls,
+        scrollArea
+    );
+
+    document.body.appendChild(root);
+
+    let drag=null;
+
+    top.addEventListener(
+        "mousedown",
+        e=>{
+            if(e.target.tagName==="BUTTON")
+                return;
+
+            const r=
+                root.getBoundingClientRect();
+
+            drag={
+                dx:e.clientX-r.left,
+                dy:e.clientY-r.top
+            };
+
+            e.preventDefault();
+        }
+    );
+
+    W.addEventListener(
+        "mousemove",
+        e=>{
+            if(!drag)return;
+
+            root.style.left=
+                Math.max(
+                    0,
+                    Math.min(
+                        innerWidth-root.offsetWidth,
+                        e.clientX-drag.dx
+                    )
+                )+"px";
+
+            root.style.top=
+                Math.max(
+                    0,
+                    Math.min(
+                        innerHeight-40,
+                        e.clientY-drag.dy
+                    )
+                )+"px";
+
+            root.style.right=
+                "auto";
+        }
+    );
+
+    W.addEventListener(
+        "mouseup",
+        ()=>drag=null
+    );
+
+    styleButtons();
+    updateState();
+}
+
+// +X = oben, +Z = links.
+function blockScreen(
+    blockX,
+    blockZ,
+    ppb,
+    cx,
+    cy
+){
+    return{
+        x:
+            cx-
+            (
+                (blockZ+.5)-
+                current.z
+            )*ppb,
+
+        y:
+            cy-
+            (
+                (blockX+.5)-
+                current.x
+            )*ppb
+    };
+}
+
+function worldScreen(
+    worldX,
+    worldZ,
+    ppb,
+    cx,
+    cy
+){
+    return{
+        x:
+            cx-
+            (worldZ-current.z)*ppb,
+
+        y:
+            cy-
+            (worldX-current.x)*ppb
+    };
+}
+
+function grids(
+    w,
+    h,
+    cx,
+    cy,
+    ppb
+){
+
+    if(!current)return;
+
+    const minX=
+        Math.floor(
+            current.x-radius-2
+        );
+
+    const maxX=
+        Math.ceil(
+            current.x+radius+2
+        );
+
+    const minZ=
+        Math.floor(
+            current.z-radius-2
+        );
+
+    const maxZ=
+        Math.ceil(
+            current.z+radius+2
+        );
+
+    if(ppb>=2.2){
+
+        ctx.strokeStyle=
+            "rgba(0,0,0,.055)";
+
+        ctx.lineWidth=1;
+
+        for(let z=minZ;z<=maxZ+1;z++){
+
+            const sx=
+                worldScreen(
+                    0,
+                    z,
+                    ppb,
+                    cx,
+                    cy
+                ).x;
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                Math.round(sx)+.5,
+                0
+            );
+
+            ctx.lineTo(
+                Math.round(sx)+.5,
+                h
+            );
+
+            ctx.stroke();
+        }
+
+        for(let x=minX;x<=maxX+1;x++){
+
+            const sy=
+                worldScreen(
+                    x,
+                    0,
+                    ppb,
+                    cx,
+                    cy
+                ).y;
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                0,
+                Math.round(sy)+.5
+            );
+
+            ctx.lineTo(
+                w,
+                Math.round(sy)+.5
+            );
+
+            ctx.stroke();
+        }
+    }
+
+    ctx.strokeStyle=
+        "rgba(0,0,0,.22)";
+
+    ctx.lineWidth=1.1;
+
+    for(
+        let z=
+            Math.floor(minZ/32)*32;
+
+        z<=maxZ;
+
+        z+=32
+    ){
+
+        const sx=
+            cx-
+            (z-current.z)*ppb;
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            sx+.5,
+            0
+        );
+
+        ctx.lineTo(
+            sx+.5,
+            h
+        );
+
+        ctx.stroke();
+    }
+
+    for(
+        let x=
+            Math.floor(minX/32)*32;
+
+        x<=maxX;
+
+        x+=32
+    ){
+
+        const sy=
+            cy-
+            (x-current.x)*ppb;
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            0,
+            sy+.5
+        );
+
+        ctx.lineTo(
+            w,
+            sy+.5
+        );
+
+        ctx.stroke();
+    }
+}
+
+function surfaceShade(
+    cell,
+    up,
+    down,
+    left,
+    right
+){
+
+    const h=
+        cell.y??0;
+
+    const uy=
+        up?.y??h;
+
+    const dy=
+        down?.y??h;
+
+    const ly=
+        left?.y??h;
+
+    const ry=
+        right?.y??h;
+
+    return clamp(
+        (
+            (ly+uy)-
+            (ry+dy)
+        )*2.4+
+        noise(
+            cell.x,
+            cell.z,
+            cell.id
+        )*5,
+
+        -28,
+        20
+    );
+}
+
+function drawRelief(
+    sx,
+    sy,
+    ppb,
+    cell,
+    up,
+    down,
+    left,
+    right
+){
+
+    if(ppb<2.4)return;
+
+    const h=
+        cell.y??0;
+
+    const uy=
+        up?.y??h;
+
+    const dy=
+        down?.y??h;
+
+    const ly=
+        left?.y??h;
+
+    const ry=
+        right?.y??h;
+
+    const strip=
+        Math.max(
+            1,
+            Math.floor(ppb*.14)
+        );
+
+    if(uy<h){
+
+        ctx.fillStyle=
+            `rgba(255,255,255,${clamp((h-uy)*.055,.035,.18)})`;
+
+        ctx.fillRect(
+            sx,
+            sy,
+            ppb,
+            strip
+        );
+    }
+
+    if(ly<h){
+
+        ctx.fillStyle=
+            `rgba(255,255,255,${clamp((h-ly)*.04,.025,.13)})`;
+
+        ctx.fillRect(
+            sx,
+            sy,
+            strip,
+            ppb
+        );
+    }
+
+    if(dy>h){
+
+        ctx.fillStyle=
+            `rgba(0,0,0,${clamp((dy-h)*.075,.05,.27)})`;
+
+        ctx.fillRect(
+            sx,
+            sy+ppb-strip,
+            ppb,
+            strip
+        );
+    }
+
+    if(ry>h){
+
+        ctx.fillStyle=
+            `rgba(0,0,0,${clamp((ry-h)*.075,.05,.27)})`;
+
+        ctx.fillRect(
+            sx+ppb-strip,
+            sy,
+            strip,
+            ppb
+        );
+    }
+}
+
+function drawSurfaceDecoration(
+    cell,
+    sx,
+    sy,
+    ppb
+){
+
+    if(
+        !cell.deco||
+        ppb<3.5
+    )return;
+
+    const tex=
+        surfaceTextureName(
+            cell.deco
+        );
+
+    if(tex){
+        drawAtlasTexture(
+            tex,
+            sx,
+            sy,
+            ppb,
+            ppb
+        );
+    }
+}
+
+function drawBase(
+    w,
+    h,
+    cx,
+    cy,
+    ppb
+){
+
+    if(
+        !mapData||
+        !current
+    )return;
+
+    const size=
+        mapData.length;
+
+    for(let r=0;r<size;r++){
+
+        for(let c=0;c<size;c++){
+
+            const cell=
+                mapData[r][c];
+
+            if(
+                !cell||
+                isAir(cell.id)
+            )continue;
+
+            const p=
+                blockScreen(
+                    cell.x,
+                    cell.z,
+                    ppb,
+                    cx,
+                    cy
+                );
+
+            const sx=
+                p.x-ppb/2;
+
+            const sy=
+                p.y-ppb/2;
+
+            if(
+                sx+ppb<0||
+                sy+ppb<0||
+                sx>w||
+                sy>h
+            )continue;
+
+            // =================================================
+            // MAP = ECHTE OBERFLÄCHENTEXTUREN
+            // =================================================
+
+            if(mode==="surface"){
+
+                const up=
+                    mapData[
+                        Math.max(0,r-1)
+                    ][c];
+
+                const down=
+                    mapData[
+                        Math.min(size-1,r+1)
+                    ][c];
+
+                const left=
+                    mapData[r][
+                        Math.max(0,c-1)
+                    ];
+
+                const right=
+                    mapData[r][
+                        Math.min(size-1,c+1)
+                    ];
+
+                const base=
+                    blockColor(cell.id);
+
+                // Farb-Fallback
+                ctx.fillStyle=
+                    `rgb(${base[0]},${base[1]},${base[2]})`;
+
+                ctx.fillRect(
+                    sx,
+                    sy,
+                    ppb+.7,
+                    ppb+.7
+                );
+
+                // Echte Textur aus Old Bloxd.zip
+                drawAtlasTexture(
+                    surfaceTextureName(cell.id),
+                    sx,
+                    sy,
+                    ppb+.7,
+                    ppb+.7
+                );
+
+                // leichte allgemeine Höhenbeleuchtung
+                const shade=
+                    surfaceShade(
+                        cell,
+                        up,
+                        down,
+                        left,
+                        right
+                    );
+
+                if(shade<0){
+
+                    ctx.fillStyle=
+                        `rgba(0,0,0,${Math.min(.25,-shade/115)})`;
+
+                    ctx.fillRect(
+                        sx,
+                        sy,
+                        ppb+.7,
+                        ppb+.7
+                    );
+
+                }else if(shade>0){
+
+                    ctx.fillStyle=
+                        `rgba(255,255,255,${Math.min(.12,shade/170)})`;
+
+                    ctx.fillRect(
+                        sx,
+                        sy,
+                        ppb+.7,
+                        ppb+.7
+                    );
+                }
+
+                // Schatten an Höhenkanten
+                drawRelief(
+                    sx,
+                    sy,
+                    ppb,
+                    cell,
+                    up,
+                    down,
+                    left,
+                    right
+                );
+
+                // Blumen / hohes Gras als echtes Overlay
+                drawSurfaceDecoration(
+                    cell,
+                    sx,
+                    sy,
+                    ppb
+                );
+
+            }else{
+
+                // =================================================
+                // Y / UNTERGRUND:
+                // KEINE TEXTUREN.
+                // Erzfarben bleiben absichtlich klar.
+                // =================================================
+
+                const col=
+                    blockColor(cell.id);
+
+                ctx.fillStyle=
+                    `rgb(${col[0]},${col[1]},${col[2]})`;
+
+                ctx.fillRect(
+                    sx,
+                    sy,
+                    ppb+.7,
+                    ppb+.7
+                );
+            }
+        }
+    }
+
+    grids(
+        w,
+        h,
+        cx,
+        cy,
+        ppb
+    );
+}
+
+function drawOreList(
+    list,
+    ppb,
+    cx,
+    cy,
+    type,
+    seen
+){
+
+    for(const p of list){
+
+        const k=
+            `${p.x}|${p.y}|${p.z}|${p.id}`;
+
+        if(seen.has(k))
+            continue;
+
+        seen.add(k);
+
+        const s=
+            blockScreen(
+                p.x,
+                p.z,
+                ppb,
+                cx,
+                cy
+            );
+
+        const col=
+            oreColor(p.id);
+
+        const size=
+            Math.max(
+                3,
+                Math.min(
+                    ppb*
+                    (
+                        type==="y1"
+                            ?.72
+                            :.58
+                    ),
+                    12
+                )
+            );
+
+        ctx.save();
+
+        ctx.globalAlpha=
+            type==="y1"
+                ?.96
+                :.9;
+
+        ctx.fillStyle=
+            `rgb(${col[0]},${col[1]},${col[2]})`;
+
+        ctx.fillRect(
+            s.x-size/2,
+            s.y-size/2,
+            size,
+            size
+        );
+
+        ctx.strokeStyle=
+            type==="y1"
+                ?"rgba(255,255,255,.95)"
+                :"rgba(0,0,0,.75)";
+
+        ctx.lineWidth=1;
+
+        ctx.strokeRect(
+            s.x-size/2+.5,
+            s.y-size/2+.5,
+            size-1,
+            size-1
+        );
+
+        ctx.restore();
+    }
+}
+
+function drawStructures(
+    ppb,
+    cx,
+    cy
+){
+
+    if(!showSpawner)return;
+
+    for(const p of structurePts){
+
+        const s=
+            blockScreen(
+                p.x,
+                p.z,
+                ppb,
+                cx,
+                cy
+            );
+
+        const size=
+            clamp(
+                ppb*2.2,
+                10,
+                18
+            );
+
+        ctx.save();
+
+        ctx.shadowColor=
+            "rgba(200,92,255,.6)";
+
+        ctx.shadowBlur=6;
+
+        ctx.strokeStyle=
+            "#c85cff";
+
+        ctx.lineWidth=2;
+
+        ctx.strokeRect(
+            s.x-size/2,
+            s.y-size/2,
+            size,
+            size
+        );
+
+        ctx.shadowBlur=0;
+
+        ctx.fillStyle=
+            "rgba(200,92,255,.14)";
+
+        ctx.fillRect(
+            s.x-size/2+2,
+            s.y-size/2+2,
+            size-4,
+            size-4
+        );
+
+        ctx.restore();
+    }
+}
+
+function drawPlayer(
+    cx,
+    cy
+){
+
+    ctx.save();
+
+    ctx.shadowColor=
+        "#6eeaff";
+
+    ctx.shadowBlur=10;
+
+    ctx.fillStyle=
+        "#6eeaff";
+
+    ctx.beginPath();
+
+    ctx.arc(
+        cx,
+        cy,
+        5,
+        0,
+        Math.PI*2
+    );
+
+    ctx.fill();
+
+    ctx.shadowBlur=0;
+
+    ctx.strokeStyle=
+        "white";
+
+    ctx.lineWidth=1.5;
+
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+function drawScale(
+    ppb,
+    h
+){
+
+    const blocks=
+        radius<=3
+            ?1
+            :radius<=5
+                ?2
+                :10;
+
+    const len=
+        Math.min(
+            blocks*ppb,
+            MAP_W-28
+        );
+
+    const x=12;
+    const y=h-18;
+
+    ctx.strokeStyle="white";
+    ctx.lineWidth=2;
+
+    ctx.beginPath();
+    ctx.moveTo(x,y);
+    ctx.lineTo(x+len,y);
+    ctx.stroke();
+
+    ctx.beginPath();
+
+    ctx.moveTo(x,y-4);
+    ctx.lineTo(x,y+4);
+
+    ctx.moveTo(x+len,y-4);
+    ctx.lineTo(x+len,y+4);
+
+    ctx.stroke();
+
+    ctx.fillStyle="white";
+    ctx.font="9px Consolas";
+
+    ctx.fillText(
+        `${blocks} block${blocks===1?"":"s"}`,
+        x,
+        y-6
+    );
+}
+
+function drawModeLabel(w){
+
+    const label=
+        mode==="surface"
+            ?"MAP"
+            :`Y ${layerY()}`;
+
+    ctx.font=
+        "800 10px Consolas";
+
+    const tw=
+        ctx.measureText(label).width+12;
+
+    ctx.fillStyle=
+        "rgba(4,12,19,.72)";
+
+    ctx.fillRect(
+        w-tw-8,
+        8,
+        tw,
+        20
+    );
+
+    ctx.fillStyle=
+        "#dff7ff";
+
+    ctx.fillText(
+        label,
+        w-tw-2,
+        22
+    );
+}
+
+function draw(){
+
+    if(
+        !ctx||
+        !canvas
+    )return;
+
+    const w=canvas.width;
+    const h=canvas.height;
+
+    const cx=w/2;
+    const cy=h/2;
+
+    const ppb=
+        w/(radius*2);
+
+    ctx.imageSmoothingEnabled=false;
+
+    ctx.fillStyle=
+        "#07111a";
+
+    ctx.fillRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+    drawBase(
+        w,
+        h,
+        cx,
+        cy,
+        ppb
+    );
+
+    const seen=
+        new Set();
+
+    if(showAllOres){
+        drawOreList(
+            allOrePts,
+            ppb,
+            cx,
+            cy,
+            "all",
+            seen
+        );
+    }
+
+    if(showY1){
+        drawOreList(
+            y1OrePts,
+            ppb,
+            cx,
+            cy,
+            "y1",
+            seen
+        );
+    }
+
+    drawStructures(
+        ppb,
+        cx,
+        cy
+    );
+
+    drawPlayer(
+        cx,
+        cy
+    );
+
+    drawScale(
+        ppb,
+        h
+    );
+
+    drawModeLabel(w);
+}
+
+function loop(now){
+
+    if(
+        now-lastDraw>=
+        DRAW_MS
+    ){
+
+        lastDraw=now;
+
+        updateText();
+        updateState();
+        draw();
+    }
+
+    requestAnimationFrame(loop);
+}
+
+hook();
+
+function boot(){
+    ui();
+    init();
+    requestAnimationFrame(loop);
+}
+
+if(
+    document.readyState===
+    "loading"
+){
+    document.addEventListener(
+        "DOMContentLoaded",
+        boot,
+        {once:true}
+    );
+}else{
+    boot();
+}
+
+W.__BloxdMiningMap={
+
+    getPosition:()=>
+        current
+            ?{...current}
+            :null,
+
+    getSeed:seed,
+
+    getMode:()=>
+        mode,
+
+    getLayer:
+        layerY,
+
+    getRadius:()=>
+        radius,
+
+    yPlus1Enabled:()=>
+        showY1,
+
+    allOresEnabled:()=>
+        showAllOres,
+
+    spawnerEnabled:()=>
+        showSpawner,
+
+    getStructures:()=>
+        structurePts.map(
+            p=>({...p})
+        ),
+
+    toggleYPlus1:
+        toggleY1,
+
+    toggleAllOres:
+        toggleAll,
+
+    toggleSpawner,
+
+    reloadMap(){
+
+        invalidateMap();
+        invalidateOres();
+        invalidateStructures();
+
+        queueMap(true);
+
+        if(
+            showY1||
+            showAllOres
+        ){
+            queueOres(true);
+        }
+
+        if(showSpawner){
+            queueStructures(true);
+        }
+
+        if(chunkDetails?.open){
+            queueChunkStats(true);
+        }
+    }
+};
+
+})();
