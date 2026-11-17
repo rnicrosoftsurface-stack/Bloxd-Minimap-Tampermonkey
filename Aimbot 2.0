@@ -1,0 +1,1344 @@
+// ==UserScript==
+// @name         Bloxd Aim Bot
+// @namespace    bloxd-minimap-safe
+// @version      1.3.0
+// @description  Aim Bot mit frei belegbarer Taste und Spieler-Kästen.
+// @match        https://bloxd.io/*
+// @match        https://bloxd.dev/*
+// @grant        unsafeWindow
+// @run-at       document-start
+// ==/UserScript==
+(function () {
+    "use strict";
+
+    const W = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+
+    const address = new URL(W.location.href);
+    if (address.searchParams.get("client") !== "js") {
+        address.searchParams.set("client", "js");
+        W.location.replace(address.href);
+        return;
+    }
+
+    const FRAME_MS = 33;
+    const PLAYERS_MS = 300;
+    const TARGET_MS = 150;
+    const KEY_STORAGE = "bloxd-aim-bot-key-v1";
+
+    const EDGES = [
+        [0, 1], [1, 3], [3, 2], [2, 0],
+        [4, 5], [5, 7], [7, 6], [6, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7]
+    ];
+
+    let noa = null;
+    let overlay = null;
+    let ctx = null;
+    let menu = null;
+    let toggle = null;
+    let keyButton = null;
+    let clearKeyButton = null;
+    let status = null;
+
+    let enabled = false;
+    let waitingForKey = false;
+    let selectedKey = readSavedKey();
+
+    let lastFrame = 0;
+    let lastPlayers = 0;
+    let playerIds = [];
+    let nearestId = null;
+    let lastTarget = 0;
+    let hookedCamera = null;
+    let hookedCameraMethod = null;
+    let lastAim = 0;
+    let boxesDrawn = 0;
+
+    function readSavedKey() {
+        try {
+            const value = JSON.parse(
+                W.localStorage.getItem(KEY_STORAGE)
+            );
+
+            if (
+                typeof value?.code === "string" &&
+                typeof value?.label === "string"
+            ) {
+                return value;
+            }
+        } catch (_) {}
+
+        return null;
+    }
+
+    function saveKey() {
+        try {
+            if (selectedKey) {
+                W.localStorage.setItem(
+                    KEY_STORAGE,
+                    JSON.stringify(selectedKey)
+                );
+            } else {
+                W.localStorage.removeItem(
+                    KEY_STORAGE
+                );
+            }
+        } catch (_) {}
+    }
+
+    function updateKeyButton() {
+        if (!keyButton || !clearKeyButton) return;
+
+        keyButton.textContent = waitingForKey
+            ? "Taste drücken…"
+            : selectedKey
+                ? `Taste: ${selectedKey.label}`
+                : "Taste: –";
+
+        keyButton.style.borderColor =
+            waitingForKey
+                ? "#ffd166"
+                : "#47596b";
+
+        clearKeyButton.disabled =
+            !selectedKey;
+
+        clearKeyButton.style.opacity =
+            selectedKey
+                ? "1"
+                : ".35";
+    }
+
+    function isTyping(event) {
+        const target = event.target;
+
+        return !!target?.closest?.(
+            'input,textarea,select,[contenteditable="true"],[role="textbox"]'
+        );
+    }
+
+    function isNoa(value) {
+        try {
+            return !!value &&
+                typeof value.entities?.getState === "function" &&
+                typeof value.bloxd?.getPlayerIds === "function";
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function findNoa() {
+        try {
+            if (isNoa(W.__bloxdNoa)) {
+                return W.__bloxdNoa;
+            }
+
+            if (isNoa(W.noa)) {
+                return W.noa;
+            }
+        } catch (_) {}
+
+        return null;
+    }
+
+    function captureNoa() {
+        noa = findNoa();
+
+        if (noa) {
+            hookCamera();
+            return;
+        }
+
+        const proto = W.Function.prototype;
+        const original = proto.call;
+
+        function wrappedCall() {
+            if (!noa) {
+                try {
+                    const argument =
+                        arguments[1];
+
+                    const candidate =
+                        isNoa(argument)
+                            ? argument
+                            : argument &&
+                              typeof argument === "object"
+                                ? argument.ap
+                                : null;
+
+                    if (isNoa(candidate)) {
+                        noa = candidate;
+                        hookCamera();
+
+                        if (
+                            proto.call ===
+                            wrappedCall
+                        ) {
+                            proto.call =
+                                original;
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            return Reflect.apply(
+                original,
+                this,
+                arguments
+            );
+        }
+
+        proto.call = wrappedCall;
+
+        W.setTimeout(() => {
+            if (
+                proto.call ===
+                wrappedCall
+            ) {
+                proto.call =
+                    original;
+            }
+        }, 120000);
+    }
+
+    function readIds(value) {
+        if (value instanceof Map) {
+            return [...value.values()];
+        }
+
+        if (Array.isArray(value)) {
+            return value;
+        }
+
+        if (
+            value &&
+            typeof value === "object"
+        ) {
+            return Object.values(value);
+        }
+
+        return [];
+    }
+
+    function refreshPlayers(now) {
+        if (
+            now - lastPlayers <
+            PLAYERS_MS
+        ) {
+            return;
+        }
+
+        lastPlayers = now;
+
+        if (!noa) {
+            noa = findNoa();
+
+            if (noa) {
+                hookCamera();
+            }
+        }
+
+        if (!noa) {
+            playerIds = [];
+            return;
+        }
+
+        try {
+            const ownIds = new Set([
+                Number(
+                    noa.playerEntity?.id ??
+                    noa.playerEntity ??
+                    NaN
+                ),
+                Number(noa.CpO),
+                Number(noa.jCO)
+            ]);
+
+            const ids = new Set();
+
+            for (
+                const raw of readIds(
+                    noa.bloxd.getPlayerIds()
+                )
+            ) {
+                const id = Number(
+                    raw?.entityId ??
+                    raw?.id ??
+                    raw
+                );
+
+                if (
+                    Number.isFinite(id) &&
+                    !ownIds.has(id)
+                ) {
+                    ids.add(id);
+                }
+            }
+
+            playerIds = [...ids];
+
+            if (!ids.has(nearestId)) {
+                nearestId = null;
+            }
+        } catch (_) {
+            playerIds = [];
+            nearestId = null;
+        }
+    }
+
+    function hookCamera() {
+        const camera = noa?.camera;
+
+        const method =
+            typeof camera?.QbO === "function"
+                ? "QbO"
+                : typeof camera?.applyInputsToCamera === "function"
+                    ? "applyInputsToCamera"
+                    : null;
+
+        if (!method) return;
+
+        if (
+            hookedCamera === camera &&
+            camera[method] === hookedCameraMethod
+        ) {
+            return;
+        }
+
+        const original =
+            camera[method];
+
+        function wrappedInputs() {
+            const result = Reflect.apply(
+                original,
+                this,
+                arguments
+            );
+
+            if (enabled) {
+                aimAtNearest(
+                    this,
+                    performance.now()
+                );
+            }
+
+            return result;
+        }
+
+        camera[method] =
+            wrappedInputs;
+
+        hookedCamera =
+            camera;
+
+        hookedCameraMethod =
+            wrappedInputs;
+    }
+
+    function vec3(value) {
+        if (!value) return null;
+
+        const x =
+            Number(value[0] ?? value.x);
+
+        const y =
+            Number(value[1] ?? value.y);
+
+        const z =
+            Number(value[2] ?? value.z);
+
+        return [x, y, z].every(
+            Number.isFinite
+        )
+            ? [x, y, z]
+            : null;
+    }
+
+    function playerBox(id) {
+        let state;
+
+        try {
+            state =
+                noa.entities.getState(
+                    id,
+                    "position"
+                );
+        } catch (_) {
+            return null;
+        }
+
+        if (!state) return null;
+
+        let position =
+            vec3(state.fbO) ||
+            vec3(state._renderPosition) ||
+            vec3(state._localPosition);
+
+        if (!position) {
+            const global =
+                vec3(state.position);
+
+            const origin =
+                vec3(noa.worldOriginOffset) ||
+                vec3(noa.jp) ||
+                [0, 0, 0];
+
+            if (global) {
+                position = global.map(
+                    (value, i) =>
+                        value - origin[i]
+                );
+            }
+        }
+
+        if (!position) return null;
+
+        const width =
+            Number(state.width);
+
+        const height =
+            Number(state.height);
+
+        const half =
+            Number.isFinite(width) &&
+            width > 0
+                ? Math.min(
+                    width / 2,
+                    2
+                )
+                : 0.4;
+
+        const tall =
+            Number.isFinite(height) &&
+            height > 0
+                ? Math.min(
+                    height,
+                    4
+                )
+                : 1.8;
+
+        return {
+            x: position[0],
+            y: position[1],
+            z: position[2],
+            half,
+            tall
+        };
+    }
+
+    function aimAtNearest(
+        camera,
+        now
+    ) {
+        if (
+            !noa ||
+            !camera ||
+            !enabled
+        ) {
+            return;
+        }
+
+        refreshPlayers(now);
+
+        const eye = vec3(
+            camera.AbO?.() ||
+            camera._localGetTargetPosition?.()
+        );
+
+        if (!eye) return;
+
+        if (
+            nearestId === null ||
+            now - lastTarget >= TARGET_MS
+        ) {
+            let bestId = null;
+            let bestDistance =
+                Infinity;
+
+            for (
+                const id of playerIds
+            ) {
+                const box =
+                    playerBox(id);
+
+                if (!box) continue;
+
+                const dx =
+                    box.x - eye[0];
+
+                const dy =
+                    box.y +
+                    box.tall * 0.75 -
+                    eye[1];
+
+                const dz =
+                    box.z - eye[2];
+
+                const distance =
+                    dx * dx +
+                    dy * dy +
+                    dz * dz;
+
+                if (
+                    distance > 0.01 &&
+                    distance <
+                        bestDistance
+                ) {
+                    bestDistance =
+                        distance;
+
+                    bestId =
+                        id;
+                }
+            }
+
+            nearestId =
+                bestId;
+
+            lastTarget =
+                now;
+        }
+
+        const box =
+            nearestId === null
+                ? null
+                : playerBox(
+                    nearestId
+                );
+
+        if (!box) {
+            nearestId = null;
+            return;
+        }
+
+        const dx =
+            box.x - eye[0];
+
+        const dy =
+            box.y +
+            box.tall * 0.75 -
+            eye[1];
+
+        const dz =
+            box.z - eye[2];
+
+        const horizontal =
+            Math.hypot(
+                dx,
+                dz
+            );
+
+        if (
+            horizontal <
+            0.001
+        ) {
+            return;
+        }
+
+        const heading =
+            (
+                Math.atan2(
+                    dx,
+                    dz
+                ) +
+                Math.PI * 2
+            ) % (
+                Math.PI * 2
+            );
+
+        const pitch =
+            Math.max(
+                -Math.PI / 2 +
+                    0.001,
+
+                Math.min(
+                    Math.PI / 2 -
+                        0.001,
+
+                    -Math.atan2(
+                        dy,
+                        horizontal
+                    )
+                )
+            );
+
+        camera.heading =
+            heading;
+
+        camera.pitch =
+            pitch;
+
+        if (
+            typeof camera.meO ===
+            "function"
+        ) {
+            camera.meO();
+            lastAim = now;
+            return;
+        }
+
+        const direction =
+            camera._dirVector ||
+            camera.getDirection?.();
+
+        if (direction) {
+            direction[0] =
+                Math.sin(heading) *
+                Math.cos(pitch);
+
+            direction[1] =
+                -Math.sin(pitch);
+
+            direction[2] =
+                Math.cos(heading) *
+                Math.cos(pitch);
+        }
+
+        lastAim = now;
+    }
+
+    function project(
+        x,
+        y,
+        z,
+        matrix,
+        rect
+    ) {
+        const w =
+            x * matrix[3] +
+            y * matrix[7] +
+            z * matrix[11] +
+            matrix[15];
+
+        if (
+            w <=
+            0.01
+        ) {
+            return null;
+        }
+
+        const clipX =
+            x * matrix[0] +
+            y * matrix[4] +
+            z * matrix[8] +
+            matrix[12];
+
+        const clipY =
+            x * matrix[1] +
+            y * matrix[5] +
+            z * matrix[9] +
+            matrix[13];
+
+        const nx =
+            clipX / w;
+
+        const ny =
+            clipY / w;
+
+        if (
+            !Number.isFinite(nx) ||
+            !Number.isFinite(ny) ||
+            Math.abs(nx) > 10 ||
+            Math.abs(ny) > 10
+        ) {
+            return null;
+        }
+
+        return {
+            x:
+                rect.left +
+                (nx + 1) *
+                rect.width / 2,
+
+            y:
+                rect.top +
+                (1 - ny) *
+                rect.height / 2
+        };
+    }
+
+    function drawBox(
+        box,
+        matrix,
+        rect
+    ) {
+        const {
+            x,
+            y,
+            z,
+            half,
+            tall
+        } = box;
+
+        const points = [];
+
+        for (
+            let i = 0;
+            i < 8;
+            i++
+        ) {
+            points.push(
+                project(
+                    x + (
+                        i & 1
+                            ? half
+                            : -half
+                    ),
+
+                    y + (
+                        i & 4
+                            ? tall
+                            : 0
+                    ),
+
+                    z + (
+                        i & 2
+                            ? half
+                            : -half
+                    ),
+
+                    matrix,
+                    rect
+                )
+            );
+        }
+
+        ctx.beginPath();
+
+        let drawn =
+            false;
+
+        for (
+            const [a, b]
+            of EDGES
+        ) {
+            if (
+                !points[a] ||
+                !points[b]
+            ) {
+                continue;
+            }
+
+            ctx.moveTo(
+                points[a].x,
+                points[a].y
+            );
+
+            ctx.lineTo(
+                points[b].x,
+                points[b].y
+            );
+
+            drawn = true;
+        }
+
+        if (drawn) {
+            boxesDrawn++;
+
+            ctx.lineWidth =
+                3;
+
+            ctx.strokeStyle =
+                "rgba(0,0,0,.78)";
+
+            ctx.stroke();
+
+            ctx.lineWidth =
+                1.5;
+
+            ctx.strokeStyle =
+                "#ff465d";
+
+            ctx.stroke();
+        }
+    }
+
+    function resizeOverlay() {
+        const dpr =
+            Math.min(
+                W.devicePixelRatio ||
+                    1,
+                2
+            );
+
+        const width =
+            Math.max(
+                1,
+
+                Math.round(
+                    W.innerWidth *
+                        dpr
+                )
+            );
+
+        const height =
+            Math.max(
+                1,
+
+                Math.round(
+                    W.innerHeight *
+                        dpr
+                )
+            );
+
+        if (
+            overlay.width !==
+                width ||
+            overlay.height !==
+                height
+        ) {
+            overlay.width =
+                width;
+
+            overlay.height =
+                height;
+        }
+
+        ctx.setTransform(
+            dpr,
+            0,
+            0,
+            dpr,
+            0,
+            0
+        );
+    }
+
+    function draw(now) {
+        if (
+            !overlay ||
+            !enabled ||
+            now - lastFrame <
+                FRAME_MS
+        ) {
+            return;
+        }
+
+        lastFrame = now;
+
+        resizeOverlay();
+
+        ctx.clearRect(
+            0,
+            0,
+            W.innerWidth,
+            W.innerHeight
+        );
+
+        boxesDrawn = 0;
+
+        refreshPlayers(now);
+
+        if (
+            !noa ||
+            !playerIds.length
+        ) {
+            return;
+        }
+
+        hookCamera();
+
+        aimAtNearest(
+            noa.camera,
+            now
+        );
+
+        try {
+            const scene =
+                noa.Lb?.JKO?.() ||
+                noa.Lb?.Ce ||
+                noa.rendering
+                    ?.getScene?.();
+
+            if (!scene) return;
+
+            const matrix =
+                scene
+                    .getTransformMatrix?.()
+                    ?.m;
+
+            const gameCanvas =
+                noa.container?.canvas ||
+                scene
+                    .getEngine?.()
+                    ?.getRenderingCanvas?.();
+
+            const rect =
+                gameCanvas
+                    ?.getBoundingClientRect?.() ||
+                {
+                    left: 0,
+                    top: 0,
+                    width:
+                        W.innerWidth,
+                    height:
+                        W.innerHeight
+                };
+
+            if (
+                !matrix ||
+                matrix.length !==
+                    16 ||
+                !rect.width ||
+                !rect.height
+            ) {
+                return;
+            }
+
+            for (
+                const id
+                of playerIds
+            ) {
+                const box =
+                    playerBox(id);
+
+                if (box) {
+                    drawBox(
+                        box,
+                        matrix,
+                        rect
+                    );
+                }
+            }
+        } catch (_) {}
+    }
+
+    function setEnabled(value) {
+        enabled = value;
+
+        toggle.textContent =
+            enabled
+                ? "AIM BOT: AN"
+                : "AIM BOT: AUS";
+
+        toggle.style.background =
+            enabled
+                ? "#174437"
+                : "#202b38";
+
+        toggle.style.borderColor =
+            enabled
+                ? "#46d99a"
+                : "#47596b";
+
+        toggle.style.color =
+            enabled
+                ? "#b5ffdb"
+                : "#e4edf5";
+
+        if (
+            !enabled &&
+            ctx
+        ) {
+            ctx.clearRect(
+                0,
+                0,
+                W.innerWidth,
+                W.innerHeight
+            );
+        }
+
+        lastFrame = 0;
+        lastPlayers = 0;
+        lastTarget = 0;
+        nearestId = null;
+        lastAim = 0;
+    }
+
+    function updateStatus(now) {
+        if (!status) return;
+
+        if (waitingForKey) {
+            status.textContent =
+                "Taste drücken · Esc: abbrechen";
+
+        } else if (!enabled) {
+            status.textContent =
+                "Rechte Umschalttaste: Menü";
+
+        } else if (!noa) {
+            status.textContent =
+                "Engine wird gesucht …";
+
+        } else if (
+            !hookedCameraMethod
+        ) {
+            status.textContent =
+                "Kamera nicht gefunden";
+
+        } else if (
+            !playerIds.length ||
+            nearestId === null
+        ) {
+            status.textContent =
+                "Keine Spielerposition geladen";
+
+        } else if (
+            now - lastAim <
+            500
+        ) {
+            status.textContent =
+                `Ziel aktiv · ${boxesDrawn} Kästen im Bild`;
+
+        } else {
+            status.textContent =
+                "Warte auf Kameradaten";
+        }
+    }
+
+    function createUI() {
+        if (
+            !document.body ||
+            overlay
+        ) {
+            return;
+        }
+
+        overlay =
+            document.createElement(
+                "canvas"
+            );
+
+        overlay.id =
+            "bloxd-player-esp-overlay";
+
+        overlay.style.cssText =
+            "position:fixed;inset:0;" +
+            "width:100vw;height:100vh;" +
+            "z-index:2147483644;" +
+            "pointer-events:none";
+
+        ctx =
+            overlay.getContext(
+                "2d",
+                {
+                    alpha: true
+                }
+            );
+
+        menu =
+            document.createElement(
+                "div"
+            );
+
+        menu.id =
+            "bloxd-player-esp-menu";
+
+        menu.style.cssText =
+            "position:fixed;" +
+            "top:24px;right:24px;" +
+            "z-index:2147483645;" +
+            "width:250px;padding:12px;" +
+            "background:rgba(8,18,29,.94);" +
+            "border:1px solid #354c60;" +
+            "border-radius:10px;" +
+            "box-shadow:0 8px 28px #0008;" +
+            "color:#eef6ff;" +
+            "font-family:Arial,sans-serif;" +
+            "user-select:none";
+
+        const title =
+            document.createElement(
+                "div"
+            );
+
+        title.textContent =
+            "AIM BOT";
+
+        title.style.cssText =
+            "font:800 12px Arial;" +
+            "margin-bottom:10px";
+
+        const row =
+            document.createElement(
+                "div"
+            );
+
+        row.style.cssText =
+            "display:flex;" +
+            "align-items:center;" +
+            "gap:5px";
+
+        toggle =
+            document.createElement(
+                "button"
+            );
+
+        toggle.type =
+            "button";
+
+        toggle.style.cssText =
+            "flex:1;min-width:0;" +
+            "height:34px;" +
+            "border:1px solid #47596b;" +
+            "border-radius:7px;" +
+            "font:800 11px Arial;" +
+            "cursor:pointer";
+
+        toggle.addEventListener(
+            "click",
+            () =>
+                setEnabled(
+                    !enabled
+                )
+        );
+
+        keyButton =
+            document.createElement(
+                "button"
+            );
+
+        keyButton.type =
+            "button";
+
+        keyButton.title =
+            "Taste für Aim Bot auswählen";
+
+        keyButton.style.cssText =
+            "width:94px;height:34px;" +
+            "flex:0 0 auto;" +
+            "border:1px solid #47596b;" +
+            "border-radius:7px;" +
+            "background:#202b38;" +
+            "color:#e4edf5;" +
+            "font:800 10px Arial;" +
+            "cursor:pointer";
+
+        keyButton.addEventListener(
+            "click",
+            () => {
+                waitingForKey =
+                    true;
+
+                updateKeyButton();
+
+                if (
+                    document
+                        .pointerLockElement
+                ) {
+                    document
+                        .exitPointerLock?.();
+                }
+            }
+        );
+
+        clearKeyButton =
+            document.createElement(
+                "button"
+            );
+
+        clearKeyButton.type =
+            "button";
+
+        clearKeyButton.title =
+            "Ausgewählte Taste löschen";
+
+        clearKeyButton.textContent =
+            "×";
+
+        clearKeyButton.style.cssText =
+            "width:20px;height:20px;" +
+            "flex:0 0 auto;" +
+            "padding:0;" +
+            "border:1px solid #47596b;" +
+            "border-radius:5px;" +
+            "background:#202b38;" +
+            "color:#e4edf5;" +
+            "font:800 14px Arial;" +
+            "cursor:pointer";
+
+        clearKeyButton.addEventListener(
+            "click",
+            () => {
+                waitingForKey =
+                    false;
+
+                selectedKey =
+                    null;
+
+                saveKey();
+                updateKeyButton();
+            }
+        );
+
+        row.append(
+            toggle,
+            keyButton,
+            clearKeyButton
+        );
+
+        status =
+            document.createElement(
+                "div"
+            );
+
+        status.style.cssText =
+            "font:700 9px Arial;" +
+            "color:#a8bdd0;" +
+            "margin-top:8px";
+
+        menu.append(
+            title,
+            row,
+            status
+        );
+
+        document.body.append(
+            overlay,
+            menu
+        );
+
+        setEnabled(false);
+        updateKeyButton();
+
+        updateStatus(
+            performance.now()
+        );
+    }
+
+    document.addEventListener(
+        "keydown",
+        event => {
+            if (
+                waitingForKey
+            ) {
+                if (
+                    event.repeat
+                ) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopImmediatePropagation();
+
+                if (
+                    event.code ===
+                    "Escape"
+                ) {
+                    waitingForKey =
+                        false;
+
+                    updateKeyButton();
+                    return;
+                }
+
+                if (
+                    event.code ===
+                        "ShiftRight" ||
+                    event.ctrlKey ||
+                    event.altKey ||
+                    event.metaKey
+                ) {
+                    return;
+                }
+
+                if (
+                    event.code &&
+                    Array.from(
+                        event.key || ""
+                    ).length === 1
+                ) {
+                    selectedKey = {
+                        code:
+                            event.code,
+
+                        label:
+                            event.key ===
+                            " "
+                                ? "LEER"
+                                : event.key
+                                    .toLocaleUpperCase(
+                                        "de-DE"
+                                    )
+                    };
+
+                    waitingForKey =
+                        false;
+
+                    saveKey();
+                    updateKeyButton();
+                }
+
+                return;
+            }
+
+            if (
+                event.code ===
+                    "ShiftRight" &&
+                !event.repeat
+            ) {
+                if (!menu) {
+                    createUI();
+                }
+
+                if (!menu) return;
+
+                const show =
+                    menu.style.display ===
+                    "none";
+
+                menu.style.display =
+                    show
+                        ? "block"
+                        : "none";
+
+                if (
+                    show &&
+                    document
+                        .pointerLockElement
+                ) {
+                    document
+                        .exitPointerLock?.();
+                }
+
+                return;
+            }
+
+            if (
+                selectedKey &&
+                event.code ===
+                    selectedKey.code &&
+                !event.repeat &&
+                !isTyping(event)
+            ) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+
+                setEnabled(
+                    !enabled
+                );
+            }
+        },
+        true
+    );
+
+    function loop(now) {
+        draw(now);
+        updateStatus(now);
+
+        W.requestAnimationFrame(
+            loop
+        );
+    }
+
+    captureNoa();
+
+    if (
+        document.readyState ===
+        "loading"
+    ) {
+        document.addEventListener(
+            "DOMContentLoaded",
+            createUI,
+            {
+                once: true
+            }
+        );
+    } else {
+        createUI();
+    }
+
+    W.requestAnimationFrame(
+        loop
+    );
+})();
