@@ -1,0 +1,183 @@
+ // ==UserScript==
+ // @name         Bloxd Live Position Bridge v1
+ // @namespace    bloxd-minimap-safe
+ // @version      1.0.0
+ // @description  Live XYZ an externe Bloxd-Karte senden
+ // @match        https://bloxd.io/*
+ // @match        https://bloxd.dev/*
+ // @grant        unsafeWindow
+ // @run-at       document-idle
+ // ==/UserScript==
+
+ (() => {
+     "use strict";
+
+     const W = typeof unsafeWindow !== "undefined"
+         ? unsafeWindow : window;
+
+     const MAP_URL =
+         "https://rnicrosoftsurface-stack.github.io/bloxd-minimap/live.html";
+     const MAP_ORIGIN =
+         "https://rnicrosoftsurface-stack.github.io";
+
+     let mapWindow = null;
+     let lastAck = 0;
+     let panelStatus = null;
+
+     function vec3(value) {
+         if (!value) return null;
+         const a = ["x", "y", "z"].map((key, i) =>
+             Number(value[i] ?? value[key])
+         );
+         return a.every(Number.isFinite)
+             ? { x: a[0], y: a[1], z: a[2] }
+             : null;
+     }
+
+     function getPosition() {
+         try {
+             const p = vec3(
+                 W.__BloxdPlayerRadar?.getOwnPosition?.()
+             );
+             if (p) return p;
+         } catch (_) {}
+
+         try {
+             const p = vec3(
+                 W.__BloxdMiningMap?.getPosition?.()
+             );
+             if (p) return p;
+         } catch (_) {}
+
+         return null;
+     }
+
+     function getSeed() {
+         try {
+             const s = W.__BloxdMiningMap?.getSeed?.();
+             if (s !== undefined && s !== null && s !== "")
+                 return s;
+         } catch (_) {}
+
+         return new URL(W.location.href)
+             .searchParams.get("lobby") || "1234";
+     }
+
+     function openMap() {
+         const url = new URL(MAP_URL);
+         const pos = getPosition();
+
+         url.searchParams.set("seed", getSeed());
+         url.searchParams.set("radius", "32");
+
+         if (pos) {
+             url.searchParams.set("x", Math.floor(pos.x));
+             url.searchParams.set("z", Math.floor(pos.z));
+             url.searchParams.set("y", Math.floor(pos.y));
+         }
+
+         if (!mapWindow || mapWindow.closed) {
+             mapWindow = W.open(url.href, "BloxdLiveMap");
+         } else {
+             mapWindow.focus();
+         }
+
+         if (panelStatus) {
+             panelStatus.textContent = mapWindow
+                 ? "Karte geöffnet · Warte auf Verbindung"
+                 : "Popup blockiert – in Firefox erlauben";
+         }
+     }
+
+     function sendPosition() {
+         const pos = getPosition();
+
+         if (!pos) {
+             if (panelStatus)
+                 panelStatus.textContent =
+                     "Warte auf Spieler-Radar / Minimap";
+             return;
+         }
+
+         if (!mapWindow || mapWindow.closed) {
+             if (panelStatus)
+                 panelStatus.textContent = "Karte noch nicht geöffnet";
+             return;
+         }
+
+         try {
+             mapWindow.postMessage({
+                 type: "BLOXD_POSITION_V1",
+                 x: pos.x,
+                 y: pos.y,
+                 z: pos.z,
+                 seed: getSeed()
+             }, MAP_ORIGIN);
+
+             if (panelStatus) {
+                 panelStatus.textContent =
+                     (Date.now() - lastAck < 3000
+                         ? "LIVE VERBUNDEN · "
+                         : "Sende Position · ") +
+                     "X " + pos.x.toFixed(1) +
+                     " Y " + pos.y.toFixed(1) +
+                     " Z " + pos.z.toFixed(1);
+             }
+         } catch (_) {
+             if (panelStatus)
+                 panelStatus.textContent = "Übertragung fehlgeschlagen";
+         }
+     }
+
+     W.addEventListener("message", event => {
+         if (event.origin !== MAP_ORIGIN) return;
+         if (event.data?.type === "BLOXD_POSITION_ACK_V1")
+             lastAck = Date.now();
+     });
+
+     function createMenu() {
+         if (!document.body ||
+             document.getElementById("bloxd-live-bridge")) return;
+
+         const panel = document.createElement("div");
+         panel.id = "bloxd-live-bridge";
+         panel.style.cssText =
+             "position:fixed;right:18px;top:410px;" +
+             "width:260px;padding:12px;z-index:2147483647;" +
+             "background:#0b1722;color:white;" +
+             "border:1px solid #35526a;border-radius:10px;" +
+             "font:12px Arial;box-shadow:0 8px 25px #0009";
+
+         const heading = document.createElement("div");
+         heading.textContent = "BLOXD LIVE MAP BRIDGE";
+         heading.style.cssText =
+             "font-weight:900;margin-bottom:10px";
+
+         const button = document.createElement("button");
+         button.textContent = "LIVE-KARTE ÖFFNEN";
+         button.style.cssText =
+             "width:100%;height:38px;background:#176548;" +
+             "color:white;border:1px solid #39936b;" +
+             "border-radius:7px;font-weight:800;cursor:pointer";
+         button.addEventListener("click", openMap);
+
+         panelStatus = document.createElement("div");
+         panelStatus.textContent = "Karte noch nicht geöffnet";
+         panelStatus.style.cssText =
+             "margin-top:10px;color:#a9bfd2;" +
+             "font:11px/1.5 Consolas,monospace";
+
+         panel.append(heading, button, panelStatus);
+         document.body.appendChild(panel);
+     }
+
+     if (document.readyState === "loading") {
+         document.addEventListener(
+             "DOMContentLoaded", createMenu, { once: true }
+         );
+     } else {
+         createMenu();
+     }
+
+     W.setInterval(sendPosition, 350);
+ })();
